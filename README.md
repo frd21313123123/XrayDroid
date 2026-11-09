@@ -54,7 +54,7 @@ Hysteria2, TUIC и AnyTLS проверены против sing-box 1.14, ост�
 
 ## Установка
 
-Готовый APK собирается в GitHub Actions: вкладка **Actions → Android APK → Artifacts**. Для тега `v*` APK прикладывается к релизу.
+Готовый APK собирается в GitHub Actions: вкладка **Actions → Android APK → Artifacts**. Каждый push в `main` (в том числе слияние PR) собирает APK и публикует новый релиз во вкладке **Releases**. Версия: `<версия из Cargo.toml>-build.<номер запуска>`, например `0.2.0-build.42`.
 
 ## Сборка вручную
 
