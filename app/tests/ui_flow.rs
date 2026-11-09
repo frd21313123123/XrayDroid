@@ -171,5 +171,29 @@ fn ui_flow() {
     assert_eq!(ui.get_status_title().as_str(), "Ошибка");
     assert!(ui.get_status_error());
 
+    // ── пустая группа без ссылки ──
+    ui.invoke_open_page("subs".into());
+    ui.invoke_group_new();
+    assert!(ui.get_sub_dialog() && ui.get_sub_group());
+    ui.set_sub_name("Свои".into());
+    ui.set_sub_dialog(false);
+    ui.invoke_sub_save();
+    let subs = ui.get_subs();
+    assert_eq!(subs.row_count(), 1);
+    let sub = subs.row_data(0).unwrap();
+    assert!(sub.local && sub.name.as_str() == "Свои");
+    // на главном экране открыта новая (пустая) вкладка
+    let groups: Vec<String> = ui.get_groups().iter().map(|g| g.to_string()).collect();
+    assert_eq!(groups.get(ui.get_current_group() as usize).map(String::as_str), Some("Свои"));
+    assert_eq!(ui.get_servers().row_count(), 0);
+    // импорт ссылок, пока открыта вкладка группы, кладёт серверы в неё
+    ui.invoke_import_text("trojan://pw@203.0.113.9:443?security=tls#Новый".into());
+    assert_eq!(ui.get_servers().row_count(), 1);
+    assert_eq!(ui.get_servers().row_data(0).unwrap().name.as_str(), "Новый");
+    let cfg = xd_core::AppConfig::load(&dir.join("config.json"));
+    let p = cfg.profiles.iter().find(|p| p.remarks == "Новый").unwrap();
+    assert_eq!(p.sub_id, sub.id.as_str());
+    assert!(cfg.subscriptions[0].url.is_empty());
+
     let _ = std::fs::remove_dir_all(&dir);
 }

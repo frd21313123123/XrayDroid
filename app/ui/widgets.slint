@@ -641,14 +641,24 @@ export component SheetItem inherits Rectangle {
 // Нижняя панель вкладок.
 export component NavBar inherits Rectangle {
     in property <string> current;
+    // высота системной полосы жестов: вкладки рисуются над ней
+    in property <length> inset;
     callback open(string);
-    height: 76px;
+    height: 76px + root.inset;
     background: Theme.surface;
+    // линия-разделитель — строго по верхнему краю (без y Slint центрирует элемент)
     Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
         height: 1px;
         background: Theme.hair;
     }
     HorizontalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 76px;
         padding-left: 8px;
         padding-right: 8px;
         for tab in [

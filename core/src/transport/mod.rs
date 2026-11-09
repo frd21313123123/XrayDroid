@@ -83,7 +83,7 @@ pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
                 _ => "",
             };
             let alpn = if p.alpn.is_empty() { default_alpn } else { &p.alpn };
-            Box::new(tls_connect(tcp, &sni_of(p), alpn, p.allow_insecure).await?)
+            tls_for_profile(tcp, p, alpn).await?
         }
         "reality" => {
             let cfg = reality_config(p)?;
@@ -102,6 +102,44 @@ pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
         _ if p.header_type == "http" => http2::http_obfs(secured, p).await,
         _ => Ok(secured),
     }
+}
+
+// ───────────────────────── TLS ─────────────────────────
+
+/// Нужен ли ClientHello как у браузера. Xray с `fp=chrome/firefox/…` использует uTLS,
+/// и часть серверов/сетей пропускает только «браузерные» рукопожатия: стандартный
+/// ClientHello rustls легко отличить и заблокировать.
+fn browser_hello(fp: &str) -> bool {
+    !matches!(fp.trim().to_ascii_lowercase().as_str(), "" | "none" | "golang")
+}
+
+/// Серверы, с которыми не получилось рукопожатие в стиле Chrome (только TLS 1.2,
+/// HelloRetryRequest и т. п.): к ним сразу идём через rustls.
+fn plain_tls_only() -> &'static Mutex<std::collections::HashSet<String>> {
+    static SET: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// TLS для профиля: ClientHello в стиле Chrome (как uTLS в Xray), при неудаче — rustls.
+async fn tls_for_profile(tcp: TcpStream, p: &Profile, alpn: &str) -> io::Result<BoxStream> {
+    let sni = sni_of(p);
+    let key = format!("{}:{}|{}", p.address, p.port, sni);
+    if browser_hello(&p.fingerprint) && !plain_tls_only().lock().contains(&key) {
+        let protos: Vec<String> = alpn.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let hs = tls13::handshake(Box::new(tcp), &sni, &protos, tls13::Mode::Verify { insecure: p.allow_insecure });
+        match tokio::time::timeout(CONNECT_TIMEOUT, hs).await {
+            Ok(Ok(conn)) => return Ok(conn.into_stream()),
+            Err(_) => return Err(io_err("таймаут TLS-рукопожатия")),
+            Ok(Err(e)) => {
+                log::info!("TLS {}: рукопожатие в стиле Chrome не удалось ({e}), пробую стандартное", p.address);
+                let tcp = connect_tcp(&server_addr(p)).await?;
+                let s = tls_connect(tcp, &sni, alpn, p.allow_insecure).await?;
+                plain_tls_only().lock().insert(key);
+                return Ok(Box::new(s));
+            }
+        }
+    }
+    Ok(Box::new(tls_connect(tcp, &sni, alpn, p.allow_insecure).await?))
 }
 
 // ───────────────────────── TLS (rustls) ─────────────────────────

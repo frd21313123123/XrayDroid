@@ -168,6 +168,7 @@ fn android_main(app: slint::android::AndroidApp) {
     };
     let host = Arc::new(AndroidHost { vm, activity });
     slint::android::init(app).expect("slint init");
+    crate::fonts::setup_emoji_flags();
     let ui = crate::ui::build(dir, host.clone()).expect("ui");
     *UI.get_or_init(|| Mutex::new(None)).lock() = Some(ui.as_weak());
     host.call_void("onUiReady");

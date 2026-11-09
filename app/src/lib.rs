@@ -2,6 +2,7 @@
 
 slint::include_modules!();
 
+pub mod fonts;
 pub mod state;
 pub mod status;
 pub mod ui;

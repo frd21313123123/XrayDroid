@@ -88,7 +88,8 @@ fn apply_stream_query(p: &mut Profile, q: &HashMap<String, String>) {
         p.network = "xhttp".into();
     }
     p.header_type = if p.network == "grpc" || p.network == "xhttp" { g("mode") } else { g("headerType") };
-    p.host = g("host");
+    // для gRPC адрес :authority передаётся параметром `authority` (v2rayN/Xray), в старых ссылках — `host`
+    p.host = if p.network == "grpc" { q.get("authority").filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| g("host")) } else { g("host") };
     p.path = if p.network == "grpc" { g("serviceName") } else { g("path") };
     p.security = q.get("security").cloned().unwrap_or_else(|| "none".into());
     p.sni = q.get("sni").or_else(|| q.get("peer")).cloned().unwrap_or_default();
@@ -119,7 +120,7 @@ fn stream_query(p: &Profile) -> Vec<(String, String)> {
     } else {
         push("headerType", &p.header_type);
     }
-    push("host", &p.host);
+    push(if net == "grpc" { "authority" } else { "host" }, &p.host);
     if net == "grpc" {
         push("serviceName", &p.path);
     } else {
@@ -420,6 +421,19 @@ pub fn to_link(p: &Profile) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grpc_authority() {
+        let p = parse_link("vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?type=grpc&security=tls&serviceName=my-svc&authority=cdn.example.com&mode=multi#g").unwrap();
+        assert_eq!(p.host, "cdn.example.com");
+        assert_eq!(p.path, "my-svc");
+        assert_eq!(p.header_type, "multi");
+        let back = parse_link(&to_link(&p)).unwrap();
+        assert_eq!(back.host, "cdn.example.com");
+        // старые ссылки: authority в host
+        let p = parse_link("vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?type=grpc&security=tls&serviceName=x&host=h.example.com#g").unwrap();
+        assert_eq!(p.host, "h.example.com");
+    }
 
     #[test]
     fn vless_reality() {

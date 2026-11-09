@@ -25,6 +25,8 @@ export struct SubItem {
     id: string,
     name: string,
     url: string,
+    // группа без ссылки: серверы добавляются вручную, обновлять нечего
+    local: bool,
     enabled: bool,
     count: string,
     has-usage: bool,
@@ -459,6 +461,8 @@ export component MainWindow inherits Window {
     in property <bool> subs-busy;
     in-out property <bool> sub-auto: true;
     in-out property <bool> sub-dialog;
+    // диалог открыт для группы без ссылки (поле URL скрыто)
+    in-out property <bool> sub-group;
     in-out property <string> sub-id;
     in-out property <string> sub-name;
     in-out property <string> sub-url;
@@ -518,6 +522,8 @@ export component MainWindow inherits Window {
     callback sub-edit(string);
     callback sub-refresh(string);
     callback sub-new();
+    // новая группа без ссылки (вкладка без импорта подписки)
+    callback group-new();
     callback subs-update();
     callback sub-auto-changed(bool);
 
@@ -803,14 +809,16 @@ export component MainWindow inherits Window {
                             padding: 28px;
                             spacing: 12px;
                             Text {
-                                text: "Серверов пока нет";
+                                text: root.current-group > 0 ? "В группе пока нет серверов" : "Серверов пока нет";
                                 color: Theme.ink;
                                 font-size: 18px;
                                 font-weight: 600;
                                 horizontal-alignment: center;
                             }
                             Hint {
-                                text: "Скопируйте ссылку на сервер (vless://, vmess://, trojan://, ss://…) или на подписку (https://…) и нажмите «Импорт».";
+                                text: root.current-group > 0
+                                    ? "Скопируйте ссылки на серверы и нажмите «Импорт» или создайте сервер через «+» — они попадут в эту группу."
+                                    : "Скопируйте ссылку на сервер (vless://, vmess://, trojan://, ss://…) или на подписку (https://…) и нажмите «Импорт».";
                                 horizontal-alignment: center;
                             }
                             HorizontalLayout {
@@ -1123,7 +1131,7 @@ export component MainWindow inherits Window {
                                         vertical-alignment: center;
                                         horizontal-stretch: 1;
                                     }
-                                    RoundButton { icon: "refresh"; enabled: !root.subs-busy; clicked => { root.sub-refresh(s.id); } }
+                                    if !s.local: RoundButton { icon: "refresh"; enabled: !root.subs-busy; clicked => { root.sub-refresh(s.id); } }
                                     RoundButton { icon: "edit"; clicked => { root.sub-edit(s.id); } }
                                 }
                             }
@@ -1143,6 +1151,20 @@ export component MainWindow inherits Window {
                         }
                         addsub := TouchArea { clicked => { root.sub-new(); } }
                     }
+                    Rectangle {
+                        height: 56px;
+                        border-radius: 20px;
+                        border-width: 1.5px;
+                        border-color: Theme.ring;
+                        background: addgrp.pressed ? Theme.ink.with-alpha(0.05) : transparent;
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            VerticalLayout { alignment: center; Icon { name: "layers"; size: 20px; stroke-width: 2px; } }
+                            Text { text: "Создать пустую группу"; color: Theme.ink; font-size: 15px; font-weight: 500; vertical-alignment: center; }
+                        }
+                        addgrp := TouchArea { clicked => { root.group-new(); } }
+                    }
                     Card {
                         height: ar.preferred-height;
                         ar := ToggleRow {
@@ -1153,7 +1175,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     Indent {
-                        Hint { text: root.subs-busy ? "Обновление подписок…" : "Скопируйте ссылку https://… и нажмите «Импорт» — серверы подписки появятся отдельной вкладкой на главном экране."; }
+                        Hint { text: root.subs-busy ? "Обновление подписок…" : "Скопируйте ссылку https://… и нажмите «Импорт» — серверы подписки появятся отдельной вкладкой на главном экране. Пустая группа создаёт вкладку без загрузки подписки: откройте её на главном экране и добавляйте серверы через «+»."; }
                     }
                 }
             }
@@ -1810,7 +1832,7 @@ export component MainWindow inherits Window {
 
             // ═══════════════ НИЖНЯЯ ПАНЕЛЬ ═══════════════
             if root.is-tab() && root.kb <= 0: NavBar {
-                height: 76px + root.bottom-inset;
+                inset: root.bottom-inset;
                 current: root.page;
                 open(id) => { root.show-tab(id); }
             }
@@ -1844,6 +1866,7 @@ export component MainWindow inherits Window {
         SheetItem { text: "Импорт из буфера обмена"; icon: "paste"; clicked => { root.sheet = ""; root.import-clipboard(); } }
         SheetItem { text: "Вставить ссылки вручную"; icon: "edit"; clicked => { root.sheet = ""; root.paste-text = ""; root.paste-visible = true; } }
         SheetItem { text: "Добавить подписку"; icon: "layers"; clicked => { root.sheet = ""; root.sub-new(); } }
+        SheetItem { text: "Создать пустую группу"; icon: "layers"; clicked => { root.sheet = ""; root.group-new(); } }
         SheetItem {
             text: "Создать сервер вручную";
             icon: "plus";
@@ -1960,11 +1983,15 @@ export component MainWindow inherits Window {
 
     // ── диалог подписки ──
     if root.sub-dialog: DialogFrame {
-        title: root.sub-id == "" ? "Новая подписка" : "Подписка";
+        title: root.sub-group ? (root.sub-id == "" ? "Новая группа" : "Группа") : (root.sub-id == "" ? "Новая подписка" : "Подписка");
         dismiss => { root.sub-dialog = false; }
         Field { label: "Название"; text: root.sub-name; edited(t) => { root.sub-name = t; } }
-        Field { label: "URL"; placeholder: "https://…"; mono: true; text: root.sub-url; edited(t) => { root.sub-url = t; } }
-        Hint { text: "Название можно не указывать — оно подтянется из подписки. Серверы появятся отдельной вкладкой на главном экране."; }
+        if !root.sub-group: Field { label: "URL"; placeholder: "https://…"; mono: true; text: root.sub-url; edited(t) => { root.sub-url = t; } }
+        Hint {
+            text: root.sub-group
+                ? "Пустая вкладка на главном экране без загрузки подписки. Серверы, добавленные через «+», пока открыта эта вкладка, попадут в неё."
+                : "Название можно не указывать — оно подтянется из подписки. Без URL будет создана пустая группа. Серверы появятся отдельной вкладкой на главном экране.";
+        }
         HorizontalLayout {
             alignment: end;
             spacing: 8px;
@@ -1973,7 +2000,7 @@ export component MainWindow inherits Window {
                 tint: Theme.bad;
                 clicked => {
                     root.sub-dialog = false;
-                    root.confirm-text = "Удалить подписку «" + root.sub-name + "» и её серверы?";
+                    root.confirm-text = (root.sub-group ? "Удалить группу «" : "Удалить подписку «") + root.sub-name + "» и её серверы?";
                     root.confirm-action = "delete-sub:" + root.sub-id;
                     root.confirm-visible = true;
                 }

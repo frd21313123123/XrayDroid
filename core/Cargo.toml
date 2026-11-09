@@ -47,3 +47,6 @@ rustls-webpki = { version = "0.103", default-features = false, features = ["ring
 libc = "0.2"
 parking_lot = "0.12"
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+
+[dev-dependencies]
+rcgen = "0.13"

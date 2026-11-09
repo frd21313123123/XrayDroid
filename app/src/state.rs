@@ -67,7 +67,7 @@ impl State {
             g.push(("manual".into(), "Мои".into()));
         }
         for s in &self.cfg.subscriptions {
-            g.push((s.id.clone(), if s.remarks.is_empty() { "Подписка".into() } else { s.remarks.clone() }));
+            g.push((s.id.clone(), if s.remarks.is_empty() { "Подписка".into() } else { crate::fonts::text(&s.remarks) }));
         }
         g
     }
@@ -78,6 +78,15 @@ impl State {
             "manual" => p.sub_id.is_empty(),
             g => p.sub_id == g,
         }
+    }
+
+    /// Текущая вкладка — группа без ссылки (созданная вручную): новые серверы попадают в неё.
+    pub fn local_group(&self) -> Option<String> {
+        self.cfg
+            .subscriptions
+            .iter()
+            .find(|s| s.id == self.group && s.url.trim().is_empty())
+            .map(|s| s.id.clone())
     }
 
     pub fn group_ids(&self) -> Vec<String> {
@@ -98,7 +107,7 @@ impl State {
         } else {
             ("—".to_string(), 0)
         };
-        ServerItem { id: p.id.clone().into(), name: p.display_name().into(), kind: kind_label(p).into(), delay: delay.into(), delay_state: state, selected }
+        ServerItem { id: p.id.clone().into(), name: crate::fonts::text(&p.display_name()).into(), kind: kind_label(p).into(), delay: delay.into(), delay_state: state, selected }
     }
 
     /// Все серверы для выбора в маршруте на отдельный сервер.
@@ -112,7 +121,10 @@ impl State {
             .iter()
             .map(|s| {
                 let count = self.cfg.profiles.iter().filter(|p| p.sub_id == s.id).count();
-                let when = if s.last_update > 0 {
+                let local = s.url.trim().is_empty();
+                let when = if local {
+                    "Группа без ссылки — серверы добавляются вручную".to_string()
+                } else if s.last_update > 0 {
                     let ago = now_secs() - s.last_update;
                     if ago < 120 {
                         "Обновлено только что".to_string()
@@ -131,8 +143,9 @@ impl State {
                 let ratio = if s.total > 0 { (s.used as f64 / s.total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
                 SubItem {
                     id: s.id.clone().into(),
-                    name: if s.remarks.is_empty() { "Подписка".into() } else { s.remarks.clone().into() },
-                    url: s.url.clone().into(),
+                    name: if s.remarks.is_empty() { "Подписка".into() } else { crate::fonts::text(&s.remarks).into() },
+                    url: if local { "без ссылки".into() } else { s.url.clone().into() },
+                    local,
                     enabled: s.enabled,
                     count: format!("{count} серв.").into(),
                     has_usage: s.total > 0,
@@ -199,7 +212,7 @@ impl State {
                         .profiles
                         .iter()
                         .find(|p| p.id == sp.server)
-                        .map(|p| p.display_name())
+                        .map(|p| crate::fonts::text(&p.display_name()))
                         .unwrap_or_else(|| "сервер не выбран".into())
                         .into(),
                     apps: model(badges),

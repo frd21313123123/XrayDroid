@@ -124,17 +124,37 @@ where
 
 // ───────────────────────── gRPC ─────────────────────────
 
+/// `url.PathEscape` из Go: не кодируются буквы, цифры, `-_.~` и `$&+:=@`.
+fn go_path_escape(s: &str) -> String {
+    const SET: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~')
+        .remove(b'$')
+        .remove(b'&')
+        .remove(b'+')
+        .remove(b':')
+        .remove(b'=')
+        .remove(b'@');
+    percent_encoding::utf8_percent_encode(s, SET).to_string()
+}
+
+/// Путь gRPC-запроса — точно как в Xray (`transport/internet/grpc/config.go`):
+/// * "имя" → `/имя/Tun` (`/имя/TunMulti`), имя кодируется как `url.PathEscape`;
+/// * "/a/b/Tun1|Tun2" (новый формат) → `/a/b/Tun1` (`/a/b/Tun2` для multi).
 fn grpc_path(service: &str, multi: bool) -> String {
     let s = service.trim();
-    if s.starts_with('/') {
-        // новый формат Xray: "/путь/Tun|TunMulti"
-        let mut parts = s.splitn(2, '|');
-        let tun = parts.next().unwrap_or("/");
-        let multi_p = parts.next().unwrap_or(tun);
-        return if multi { multi_p.to_string() } else { tun.to_string() };
+    if !s.starts_with('/') {
+        return format!("/{}/{}", go_path_escape(s), if multi { "TunMulti" } else { "Tun" });
     }
-    let name: String = percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string();
-    format!("/{}/{}", name, if multi { "TunMulti" } else { "Tun" })
+    let last = s.rfind('/').unwrap_or(0);
+    let service_name = s[1..last.max(1)].split('/').map(go_path_escape).collect::<Vec<_>>().join("/");
+    let ending = &s[last + 1..];
+    let mut names = ending.split('|');
+    let tun = names.next().unwrap_or("");
+    let stream = if multi { names.next().unwrap_or(tun) } else { tun };
+    format!("/{service_name}/{stream}")
 }
 
 fn varint(mut v: usize, out: &mut Vec<u8>) {
@@ -437,6 +457,17 @@ mod tests {
         assert_eq!(&out[..5], b"hello");
         assert_eq!(out.len(), 305);
         assert_eq!(grpc_path("mysvc", false), "/mysvc/Tun");
-        assert_eq!(grpc_path("/a/b|c", true), "c");
+        assert_eq!(grpc_path("mysvc", true), "/mysvc/TunMulti");
+    }
+
+    #[test]
+    fn grpc_path_like_xray() {
+        // символы, которые Go не кодирует в PathEscape, должны остаться как есть
+        assert_eq!(grpc_path("my-svc_v2.grpc~x", false), "/my-svc_v2.grpc~x/Tun");
+        assert_eq!(grpc_path("a b/c", false), "/a%20b%2Fc/Tun");
+        // новый формат: "/сервис/Tun|TunMulti"
+        assert_eq!(grpc_path("/my/sample/path1|path2", false), "/my/sample/path1");
+        assert_eq!(grpc_path("/my/sample/path1|path2", true), "/my/sample/path2");
+        assert_eq!(grpc_path("/my/sample/path1", true), "/my/sample/path1");
     }
 }

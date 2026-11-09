@@ -178,6 +178,16 @@ fn main() {
     shot("10_advanced");
     ui.invoke_open_page("about".into());
     shot("11_about");
+    // пустая группа: вкладка без загрузки подписки
+    ui.invoke_open_page("subs".into());
+    ui.invoke_group_new();
+    ui.set_sub_name("Мои серверы".into());
+    shot("12_group_dialog");
+    ui.set_sub_dialog(false);
+    ui.invoke_sub_save();
+    shot("13_subs_with_group");
+    ui.invoke_open_page("main".into());
+    shot("14_main_group");
 }
 
 #[cfg(not(target_os = "android"))]
