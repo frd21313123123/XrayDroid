@@ -24,20 +24,27 @@ pub struct DesktopHost;
 
 impl Host for DesktopHost {
     fn start_vpn(&self) {
-        status::on_service(true, "", 0, 0);
+        status::on_service(true, "", 0, 0, state::now_secs() * 1000);
     }
     fn stop_vpn(&self) {
-        status::on_service(false, "", 0, 0);
+        status::on_service(false, "", 0, 0, 0);
     }
     fn get_clipboard(&self) -> Option<String> {
         None
     }
     fn set_clipboard(&self, _: &str) {}
     fn installed_apps(&self) -> Vec<(String, String)> {
-        vec![
-            ("org.telegram.messenger".into(), "Telegram".into()),
-            ("com.google.android.youtube".into(), "YouTube".into()),
-            ("ru.yandex.searchplugin".into(), "Яндекс".into()),
+        [
+            ("com.openai.chatgpt", "ChatGPT"),
+            ("com.google.android.apps.bard", "Gemini"),
+            ("com.discord", "Discord"),
+            ("org.telegram.messenger", "Telegram"),
+            ("com.android.chrome", "Chrome"),
+            ("com.google.android.youtube", "YouTube"),
+            ("ru.yandex.searchplugin", "Яндекс"),
         ]
+        .into_iter()
+        .map(|(p, l)| (p.to_string(), l.to_string()))
+        .collect()
     }
 }

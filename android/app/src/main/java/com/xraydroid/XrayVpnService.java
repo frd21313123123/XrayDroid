@@ -33,6 +33,7 @@ public class XrayVpnService extends VpnService {
     private String lastError = "";
     private String name = "";
     private long lastUp, lastDown;
+    private long startedMs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private BroadcastReceiver queryReceiver;
 
@@ -54,6 +55,7 @@ public class XrayVpnService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
+        XrayCore.init(getApplicationContext());
         queryReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context c, Intent i) { broadcast(); }
@@ -119,6 +121,7 @@ public class XrayVpnService extends VpnService {
             String startErr = XrayCore.nativeStart(tun.getFd());
             if (!startErr.isEmpty()) { stopVpn(startErr); return; }
             running = true;
+            startedMs = System.currentTimeMillis();
             lastUp = lastDown = 0;
             notifyText(name, "Подключено");
             broadcast();
@@ -170,7 +173,8 @@ public class XrayVpnService extends VpnService {
                 .putExtra("running", running)
                 .putExtra("error", lastError)
                 .putExtra("up", s != null ? s[0] : 0L)
-                .putExtra("down", s != null ? s[1] : 0L);
+                .putExtra("down", s != null ? s[1] : 0L)
+                .putExtra("started", running ? startedMs : 0L);
         sendBroadcast(i);
     }
 

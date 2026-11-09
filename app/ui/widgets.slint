@@ -1,91 +1,94 @@
-// Тема, иконки и базовые виджеты в стиле v2rayNG.
+// Тема, иконки и базовые виджеты. Минималистичный стиль: светлая и тёмная тема,
+// один зелёный акцент, крупные скругления, моноширинные цифры.
 
 import { Palette } from "std-widgets.slint";
 
 export global Theme {
     in-out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-    out property <color> primary: dark ? #1b2128 : #263238;
-    out property <color> primary-text: #ffffff;
-    out property <color> accent: #f97910;
-    out property <color> fab-idle: dark ? #5f6368 : #9e9e9e;
-    out property <color> bg: dark ? #121212 : #eceff1;
-    out property <color> card: dark ? #1e1e1e : #ffffff;
-    out property <color> card-pressed: dark ? #2a2a2a : #f2f2f2;
-    out property <color> text: dark ? #e8eaed : #212121;
-    out property <color> text2: dark ? #9aa0a6 : #757575;
-    out property <color> divider: dark ? #2f3337 : #e0e0e0;
-    out property <color> good: #43a047;
-    out property <color> warn: #fb8c00;
-    out property <color> bad: #e53935;
-    out property <color> proxy: #1e88e5;
-    out property <color> direct: #43a047;
-    out property <color> block: #e53935;
+
+    out property <color> bg: dark ? #121311 : #f5f5f2;
+    out property <color> surface: dark ? #1c1d1b : #ffffff;
+    out property <color> field: dark ? #121311 : #f5f5f2;
+    out property <color> ink: dark ? #ecece8 : #121212;
+    out property <color> on-ink: dark ? #121212 : #ffffff;
+    out property <color> ink2: dark ? #9d9d96 : #63635e;
+    out property <color> ink3: dark ? #6f6f69 : #8a8a84;
+    out property <color> line: dark ? #34352f : #e2e2dc;
+    out property <color> hair: dark ? #2a2b27 : #f0f0eb;
+    out property <color> ring: dark ? #55564f : #cfcfc8;
+    out property <color> track-off: dark ? #44453f : #d6d6d0;
+    out property <color> bar-bg: dark ? #2d2e2a : #ededE8;
+    out property <color> accent: dark ? #3dbe74 : #0f7a3d;
+    out property <color> accent-soft: accent.with-alpha(0.10);
+    out property <color> warn: dark ? #e0a040 : #a15c00;
+    out property <color> bad: dark ? #f0766b : #b42318;
+    out property <color> blue: dark ? #7aa2ff : #1d4ed8;
+    out property <color> scrim: #00000066;
 }
 
-// ───────────── иконки (собственные контуры 24×24) ─────────────
+// ───────────── иконки (контуры 24×24, штрих 1.75) ─────────────
 
 export component Icon inherits Path {
     in property <string> name;
-    in property <color> color: Theme.primary-text;
-    width: 24px;
-    height: 24px;
+    in property <color> color: Theme.ink;
+    in property <length> size: 22px;
+    width: size;
+    height: size;
     viewbox-width: 24;
     viewbox-height: 24;
     stroke: color;
-    stroke-width: 2px;
-    fill: name == "more" ? color : transparent;
-    commands: name == "menu" ? "M 4 7 L 20 7 M 4 12 L 20 12 M 4 17 L 20 17"
+    stroke-width: 1.75px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    fill: transparent;
+    commands: name == "logo" ? "M 4 4 L 20 20 M 20 4 L 4 20"
+        : name == "gauge" ? "M 4 16 A 8 8 0 1 1 20 16 M 12 16 L 16 10"
         : name == "plus" ? "M 12 5 L 12 19 M 5 12 L 19 12"
+        : name == "power" ? "M 12 3 L 12 11 M 6.3 6.8 A 8 8 0 1 0 17.7 6.8"
+        : name == "globe" ? "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 3 12 L 21 12 M 12 3 C 15 6.2 15 17.8 12 21 M 12 3 C 9 6.2 9 17.8 12 21"
+        : name == "route" ? "M 8 5 A 2 2 0 1 0 4 5 A 2 2 0 1 0 8 5 M 20 19 A 2 2 0 1 0 16 19 A 2 2 0 1 0 20 19 M 6 7 L 6 12 A 4 4 0 0 0 10 16 L 16 16"
+        : name == "layers" ? "M 4 7 L 12 3 L 20 7 L 12 11 Z M 4 12 L 12 16 L 20 12 M 4 17 L 12 21 L 20 17"
+        : name == "sliders" ? "M 4 7 L 13 7 M 17 7 L 20 7 M 4 17 L 7 17 M 11 17 L 20 17 M 17 7 A 2 2 0 1 0 13 7 A 2 2 0 1 0 17 7 M 11 17 A 2 2 0 1 0 7 17 A 2 2 0 1 0 11 17"
+        : name == "updown" ? "M 8 10 L 12 6 L 16 10 M 8 14 L 12 18 L 16 14"
+        : name == "chevron" ? "M 9 6 L 15 12 L 9 18"
+        : name == "arrow" ? "M 5 12 L 19 12 M 13 6 L 19 12 L 13 18"
         : name == "back" ? "M 19 12 L 5 12 M 11 6 L 5 12 L 11 18"
-        : name == "check" ? "M 5 12.5 L 10 17.5 L 19.5 7"
-        : name == "close" ? "M 6 6 L 18 18 M 18 6 L 6 18"
-        : name == "share" ? "M 17.5 5.5 L 6.5 12 L 17.5 18.5 M 17.5 3.5 A 2 2 0 1 1 17.49 3.5 M 6.5 10 A 2 2 0 1 1 6.49 10 M 17.5 16.5 A 2 2 0 1 1 17.49 16.5"
-        : name == "edit" ? "M 4 20 L 4 16 L 15 5 L 19 9 L 8 20 Z M 13 7 L 17 11"
-        : name == "delete" ? "M 5 7 L 19 7 M 10 7 L 10 4.5 L 14 4.5 L 14 7 M 7 7 L 8 20 L 16 20 L 17 7 M 10.5 10.5 L 10.5 16.5 M 13.5 10.5 L 13.5 16.5"
         : name == "refresh" ? "M 19 12 A 7 7 0 1 1 16.5 6.6 M 17 3 L 17 7 L 13 7"
-        : name == "speed" ? "M 4 16 A 8 8 0 1 1 20 16 M 12 16 L 16 10"
-        : name == "sub" ? "M 5 5 L 19 5 L 19 19 L 5 19 Z M 8 9 L 16 9 M 8 12 L 16 12 M 8 15 L 13 15"
-        : name == "route" ? "M 6 4 A 2 2 0 1 1 5.99 4 M 18 16 A 2 2 0 1 1 17.99 16 M 6 6 L 6 12 A 4 4 0 0 0 10 16 L 16 16"
-        : name == "apps" ? "M 4 4 L 10 4 L 10 10 L 4 10 Z M 14 4 L 20 4 L 20 10 L 14 10 Z M 4 14 L 10 14 L 10 20 L 4 20 Z M 14 14 L 20 14 L 20 20 L 14 20 Z"
-        : name == "settings" ? "M 12 9 A 3 3 0 1 1 11.99 9 M 12 2.5 L 12 5.5 M 12 18.5 L 12 21.5 M 2.5 12 L 5.5 12 M 18.5 12 L 21.5 12 M 5.3 5.3 L 7.4 7.4 M 16.6 16.6 L 18.7 18.7 M 5.3 18.7 L 7.4 16.6 M 16.6 7.4 L 18.7 5.3"
-        : name == "log" ? "M 6 3 L 15 3 L 19 7 L 19 21 L 6 21 Z M 9 11 L 16 11 M 9 14 L 16 14 M 9 17 L 13 17"
-        : name == "info" ? "M 12 3 A 9 9 0 1 1 11.99 3 M 12 11 L 12 17 M 12 7.5 L 12 8"
+        : name == "edit" ? "M 4 20 L 4 16 L 15 5 L 19 9 L 8 20 Z"
+        : name == "search" ? "M 17 10.5 A 6.5 6.5 0 1 0 4 10.5 A 6.5 6.5 0 1 0 17 10.5 M 15.5 15.5 L 20 20"
+        : name == "check" ? "M 5 12.5 L 9.5 17 L 19 7.5"
+        : name == "delete" ? "M 5 7 L 19 7 M 10 7 L 10 4.5 L 14 4.5 L 14 7 M 7 7 L 8 20 L 16 20 L 17 7 M 10.5 10.5 L 10.5 16.5 M 13.5 10.5 L 13.5 16.5"
+        : name == "share" ? "M 17.5 5.5 L 6.5 12 L 17.5 18.5 M 19.5 5.5 A 2 2 0 1 0 15.5 5.5 A 2 2 0 1 0 19.5 5.5 M 8.5 12 A 2 2 0 1 0 4.5 12 A 2 2 0 1 0 8.5 12 M 19.5 18.5 A 2 2 0 1 0 15.5 18.5 A 2 2 0 1 0 19.5 18.5"
         : name == "copy" ? "M 8 8 L 20 8 L 20 20 L 8 20 Z M 16 8 L 16 4 L 4 4 L 4 16 L 8 16"
+        : name == "paste" ? "M 9 4 L 15 4 L 15 7 L 9 7 Z M 7 5.5 L 5 5.5 L 5 20 L 19 20 L 19 5.5 L 17 5.5 M 9 12 L 15 12 M 9 16 L 13 16"
         : name == "download" ? "M 12 4 L 12 15 M 7 10 L 12 15 L 17 10 M 5 20 L 19 20"
-        : name == "search" ? "M 10.5 4 A 6.5 6.5 0 1 1 10.49 4 M 15.5 15.5 L 20 20"
         : name == "sort" ? "M 4 6 L 20 6 M 4 12 L 14 12 M 4 18 L 9 18"
-        : name == "more" ? "M 10.5 3.5 L 13.5 3.5 L 13.5 6.5 L 10.5 6.5 Z M 10.5 10.5 L 13.5 10.5 L 13.5 13.5 L 10.5 13.5 Z M 10.5 17.5 L 13.5 17.5 L 13.5 20.5 L 10.5 20.5 Z"
+        : name == "log" ? "M 6 3 L 15 3 L 19 7 L 19 21 L 6 21 Z M 9 11 L 16 11 M 9 14 L 16 14 M 9 17 L 13 17"
+        : name == "info" ? "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 12 11 L 12 17 M 12 7.5 L 12 8"
+        : name == "close" ? "M 6 6 L 18 18 M 18 6 L 6 18"
         : name == "up" ? "M 12 19 L 12 5 M 6 11 L 12 5 L 18 11"
+        : name == "down" ? "M 12 5 L 12 19 M 6 13 L 12 19 L 18 13"
         : "";
 }
 
-// Логотип для кнопки подключения: стилизованная «V».
-export component Logo inherits Path {
-    in property <color> color: white;
-    width: 26px;
-    height: 26px;
-    viewbox-width: 24;
-    viewbox-height: 24;
-    stroke: color;
-    stroke-width: 3px;
-    fill: transparent;
-    commands: "M 4 5 L 12 20 L 20 5";
-}
+// ───────────── базовые элементы ─────────────
 
-export component IconButton inherits Rectangle {
+// Круглая кнопка в шапке: прозрачная или залитая (primary).
+export component RoundButton inherits Rectangle {
     in property <string> icon;
-    in property <color> tint: Theme.primary-text;
+    in property <bool> primary: false;
     in property <bool> enabled: true;
     callback clicked();
     width: 44px;
     height: 44px;
-    border-radius: self.width / 2;
-    background: ta.pressed ? #ffffff22 : transparent;
+    border-radius: 22px;
+    background: primary ? (ta.pressed ? Theme.ink.with-alpha(0.8) : Theme.ink) : (ta.pressed ? Theme.ink.with-alpha(0.08) : transparent);
     opacity: enabled ? 1 : 0.4;
     Icon {
         name: root.icon;
-        color: root.tint;
-        stroke-width: root.icon == "more" ? 1px : 2px;
+        size: root.primary ? 20px : 22px;
+        color: root.primary ? Theme.on-ink : Theme.ink;
+        stroke-width: root.primary ? 2px : 1.75px;
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -93,178 +96,587 @@ export component IconButton inherits Rectangle {
     }
 }
 
-export component TopBar inherits Rectangle {
+// Заголовок крупного экрана-вкладки.
+export component PageHeader inherits Rectangle {
     in property <string> title;
-    in property <string> subtitle;
-    in property <bool> show-back: true;
-    callback back();
-    callback menu();
-    background: Theme.primary;
-    height: 56px;
-    drop-shadow-blur: 4px;
-    drop-shadow-color: #00000040;
+    height: 64px;
     HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
-        padding-top: 6px;
-        padding-bottom: 6px;
+        padding-left: 20px;
+        padding-right: 12px;
+        padding-top: 8px;
         spacing: 4px;
-        alignment: stretch;
-        IconButton {
-            icon: root.show-back ? "back" : "menu";
-            clicked => {
-                if (root.show-back) { root.back(); } else { root.menu(); }
-            }
+        Text {
+            text: root.title;
+            color: Theme.ink;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.7px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
         }
         VerticalLayout {
             alignment: center;
-            padding-left: 6px;
+            HorizontalLayout { @children }
+        }
+    }
+}
+
+// Шапка вложенного экрана: «назад», заголовок, действие справа.
+export component SubHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    callback back();
+    height: 64px;
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 12px;
+        padding-top: 8px;
+        spacing: 4px;
+        VerticalLayout {
+            alignment: center;
+            RoundButton { icon: "back"; clicked => { root.back(); } }
+        }
+        VerticalLayout {
+            alignment: center;
             horizontal-stretch: 1;
             Text {
                 text: root.title;
-                color: Theme.primary-text;
-                font-size: 19px;
-                font-weight: 600;
+                color: Theme.ink;
+                font-size: 20px;
+                font-weight: 700;
+                letter-spacing: -0.4px;
                 overflow: elide;
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
-                color: #ffffffb0;
+                color: Theme.ink2;
                 font-size: 12px;
+                font-family: "monospace";
                 overflow: elide;
             }
         }
-        @children
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout { spacing: 4px; @children }
+        }
     }
 }
 
 export component Card inherits Rectangle {
-    background: Theme.card;
-    border-radius: 6px;
-    drop-shadow-blur: 3px;
-    drop-shadow-offset-y: 1px;
-    drop-shadow-color: Theme.dark ? #00000060 : #0000001c;
+    background: Theme.surface;
+    border-radius: 20px;
 }
 
-export component SectionTitle inherits Text {
-    color: Theme.accent;
-    font-size: 13px;
-    font-weight: 700;
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.hair;
+}
+
+export component SectionLabel inherits Text {
+    color: Theme.ink2;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
 }
 
 export component Hint inherits Text {
-    color: Theme.text2;
+    color: Theme.ink2;
     font-size: 12px;
     wrap: word-wrap;
 }
 
-export component Chip inherits Rectangle {
+export component Chevron inherits Icon {
+    name: "chevron";
+    size: 18px;
+    color: Theme.ink3;
+    stroke-width: 2px;
+}
+
+// Переключатель 40×24.
+export component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled(bool);
+    width: 52px;
+    height: 44px;
+    Rectangle {
+        width: 40px;
+        height: 24px;
+        border-radius: 12px;
+        background: root.checked ? Theme.accent : Theme.track-off;
+        animate background { duration: 150ms; }
+        Rectangle {
+            x: root.checked ? 18px : 2px;
+            y: 2px;
+            width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            background: white;
+            drop-shadow-blur: 2px;
+            drop-shadow-offset-y: 1px;
+            drop-shadow-color: #00000033;
+            animate x { duration: 150ms; easing: ease-out; }
+        }
+    }
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// Радиокнопка: выбранная — толстое кольцо.
+export component Radio inherits Rectangle {
+    in property <bool> on;
+    in property <color> tint: Theme.accent;
+    width: 20px;
+    height: 20px;
+    border-radius: 10px;
+    border-width: root.on ? 6px : 1.5px;
+    border-color: root.on ? root.tint : Theme.ring;
+    background: Theme.surface;
+}
+
+// Флажок 22×22 со скруглением 7.
+export component Check inherits Rectangle {
+    in property <bool> on;
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+    border-width: root.on ? 0px : 1.5px;
+    border-color: Theme.ring;
+    background: root.on ? Theme.accent : transparent;
+    if root.on: Icon {
+        name: "check";
+        size: 14px;
+        color: white;
+        stroke-width: 3px;
+    }
+}
+
+// Плитка приложения: цветная с буквой.
+export component AppTile inherits Rectangle {
+    in property <string> letter;
+    in property <color> tint;
+    in property <length> size: 32px;
+    width: size;
+    height: size;
+    border-radius: size * 0.28;
+    background: tint;
+    Text {
+        text: root.letter;
+        color: white;
+        font-size: root.size * 0.44;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Чип группы серверов.
+export component FilterChip inherits Rectangle {
     in property <string> text;
     in property <bool> active;
     callback clicked();
-    height: 40px;
+    height: 36px;
     min-width: label.preferred-width + 28px;
-    background: transparent;
+    border-radius: 18px;
+    background: active ? Theme.ink : transparent;
+    border-width: active ? 0px : 1px;
+    border-color: Theme.line;
     label := Text {
         text: root.text;
-        color: root.active ? #ffffff : #ffffffa0;
-        font-size: 14px;
-        font-weight: root.active ? 700 : 400;
+        color: root.active ? Theme.on-ink : Theme.ink;
+        font-size: 13px;
+        font-weight: 500;
+        horizontal-alignment: center;
         vertical-alignment: center;
     }
-    Rectangle {
-        y: parent.height - 3px;
-        height: 3px;
-        width: label.preferred-width + 12px;
-        background: root.active ? Theme.accent : transparent;
-        border-radius: 1.5px;
-    }
-    TouchArea {
-        clicked => { root.clicked(); }
-    }
+    TouchArea { clicked => { root.clicked(); } }
 }
 
-// Пункт меню в выпадающем списке
-export component MenuItem inherits Rectangle {
+// Метка действия правила.
+export component Tag inherits Rectangle {
     in property <string> text;
-    in property <string> icon;
-    callback clicked();
-    height: 48px;
-    background: ta.pressed ? Theme.card-pressed : transparent;
-    HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 20px;
-        spacing: 14px;
-        if root.icon != "": VerticalLayout {
-            alignment: center;
-            Icon {
-                name: root.icon;
-                color: Theme.text2;
-            }
-        }
-        Text {
-            text: root.text;
-            color: Theme.text;
-            font-size: 15px;
-            vertical-alignment: center;
-        }
-    }
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-    }
-}
-
-export component Badge inherits Rectangle {
-    in property <string> text;
-    in property <color> tint: Theme.proxy;
+    in property <color> tint;
     height: 22px;
-    width: t.preferred-width + 14px;
-    border-radius: 11px;
-    background: tint.with-alpha(0.15);
+    width: t.preferred-width + 16px;
+    border-radius: 6px;
+    background: tint.with-alpha(0.10);
     t := Text {
         text: root.text;
         color: root.tint;
-        font-size: 12px;
-        font-weight: 700;
+        font-size: 11px;
+        font-weight: 600;
     }
 }
 
-// Кнопка-текст в стиле Material (для диалогов)
-export component FlatButton inherits Rectangle {
-    in property <string> text;
-    in property <color> tint: Theme.accent;
-    callback clicked();
-    height: 40px;
-    min-width: t.preferred-width + 24px;
-    border-radius: 4px;
-    background: ta.pressed ? tint.with-alpha(0.12) : transparent;
-    t := Text {
-        text: root.text;
-        color: root.tint;
-        font-size: 14px;
-        font-weight: 700;
-    }
-    ta := TouchArea {
-        clicked => { root.clicked(); }
-    }
-}
-
-export component AccentButton inherits Rectangle {
+// Основная кнопка.
+export component PrimaryButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
+    in property <length> button-height: 40px;
     callback clicked();
-    height: 42px;
+    height: button-height;
     min-width: t.preferred-width + 32px;
-    border-radius: 21px;
-    background: !enabled ? Theme.fab-idle : ta.pressed ? Theme.accent.darker(0.15) : Theme.accent;
+    border-radius: button-height / 2;
+    background: !enabled ? Theme.track-off : ta.pressed ? Theme.ink.with-alpha(0.8) : Theme.ink;
     t := Text {
         text: root.text;
-        color: white;
+        color: Theme.on-ink;
         font-size: 14px;
-        font-weight: 700;
+        font-weight: 600;
     }
     ta := TouchArea {
         enabled: root.enabled;
         clicked => { root.clicked(); }
+    }
+}
+
+// Текстовая кнопка (диалоги, «удалить»).
+export component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <color> tint: Theme.ink;
+    callback clicked();
+    height: 44px;
+    min-width: t.preferred-width + 24px;
+    border-radius: 12px;
+    background: ta.pressed ? tint.with-alpha(0.08) : transparent;
+    t := Text {
+        text: root.text;
+        color: root.tint;
+        font-size: 15px;
+        font-weight: 500;
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Строка списка с нажатием.
+export component Tappable inherits Rectangle {
+    callback clicked();
+    background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// ───────────── поля ввода ─────────────
+
+// Однострочное поле на плоском фоне; подпись — над полем.
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> text;
+    in property <InputType> input-type: InputType.text;
+    in property <bool> mono: false;
+    callback edited(string);
+    spacing: 8px;
+    if root.label != "": SectionLabel {
+        text: root.label;
+        x: 8px;
+    }
+    Rectangle {
+        height: 52px;
+        border-radius: 16px;
+        background: Theme.surface;
+        input := TextInput {
+            x: 16px;
+            width: parent.width - 32px;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.text;
+            input-type: root.input-type;
+            color: Theme.ink;
+            font-size: root.mono ? 14px : 15px;
+            font-weight: root.mono ? 400 : 500;
+            font-family: root.mono ? "monospace" : "";
+            single-line: true;
+            selection-background-color: Theme.accent.with-alpha(0.3);
+            selection-foreground-color: Theme.ink;
+            edited => {
+                root.text = self.text;
+                root.edited(self.text);
+            }
+        }
+        if input.text == "" && root.placeholder != "": Text {
+            x: 16px;
+            width: parent.width - 32px;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.placeholder;
+            color: Theme.ink3;
+            font-size: 15px;
+            overflow: elide;
+        }
+    }
+}
+
+// Многострочное поле (моноширинное).
+export component Area inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> text;
+    in property <length> area-height: 120px;
+    callback edited(string);
+    spacing: 8px;
+    if root.label != "": SectionLabel {
+        text: root.label;
+        x: 8px;
+    }
+    Rectangle {
+        height: root.area-height;
+        border-radius: 16px;
+        background: Theme.surface;
+        clip: true;
+        TextInput {
+            x: 16px;
+            y: 14px;
+            width: parent.width - 32px;
+            height: parent.height - 28px;
+            text: root.text;
+            color: Theme.ink;
+            font-size: 13px;
+            font-family: "monospace";
+            single-line: false;
+            wrap: word-wrap;
+            selection-background-color: Theme.accent.with-alpha(0.3);
+            selection-foreground-color: Theme.ink;
+            edited => {
+                root.text = self.text;
+                root.edited(self.text);
+            }
+        }
+    }
+}
+
+// Строка-переключатель в карточке: название, пояснение, тумблер.
+export component ToggleRow inherits Rectangle {
+    in property <string> text;
+    in property <string> hint;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    height: max(56px, lay.preferred-height);
+    lay := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 6px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: root.text;
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 500;
+                wrap: word-wrap;
+            }
+            if root.hint != "": Hint { text: root.hint; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Toggle {
+                checked <=> root.checked;
+                toggled(v) => { root.toggled(v); }
+            }
+        }
+    }
+}
+
+// ───────────── выбор из списка (через нижний лист) ─────────────
+
+export global Picker {
+    in-out property <bool> visible;
+    in-out property <string> title;
+    in-out property <[string]> items;
+    in-out property <int> current;
+    in-out property <string> owner;
+    // растёт при каждом выборе
+    in-out property <int> serial;
+    in-out property <int> result;
+}
+
+// Строка «подпись + текущее значение + ⇅»; открывает лист выбора.
+export component ChoiceRow inherits Rectangle {
+    in property <string> label;
+    in property <[string]> model;
+    in property <int> current-index;
+    in property <bool> mono-value: false;
+    // true — подпись слева, значение справа (как «Стратегия DNS»)
+    in property <bool> inline: false;
+    callback selected(int);
+    property <int> serial: Picker.serial;
+    changed serial => {
+        if (Picker.owner == root.label) {
+            root.selected(Picker.result);
+        }
+    }
+    height: max(inline ? 52px : 56px, lay.preferred-height);
+    lay := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 12px;
+        if !root.inline: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text { text: root.label; color: Theme.ink2; font-size: 12px; }
+            Text {
+                text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 500;
+                overflow: elide;
+            }
+        }
+        if root.inline: Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 15px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        if root.inline: Text {
+            text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+            color: Theme.ink2;
+            font-size: 13px;
+            font-family: root.mono-value ? "monospace" : "";
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon { name: "updown"; size: 18px; color: Theme.ink3; stroke-width: 2px; }
+        }
+    }
+    TouchArea {
+        clicked => {
+            Picker.title = root.label;
+            Picker.items = root.model;
+            Picker.current = root.current-index;
+            Picker.owner = root.label;
+            Picker.visible = true;
+        }
+    }
+}
+
+// Нижний лист: затемнение и контейнер.
+export component SheetFrame inherits Rectangle {
+    in property <string> title;
+    in property <length> max-content: 460px;
+    callback dismiss();
+    background: Theme.scrim;
+    TouchArea { clicked => { root.dismiss(); } }
+    Rectangle {
+        y: parent.height - self.height;
+        width: parent.width;
+        height: sheet-lay.preferred-height;
+        background: Theme.surface;
+        border-top-left-radius: 24px;
+        border-top-right-radius: 24px;
+        TouchArea { }
+        sheet-lay := VerticalLayout {
+            padding-top: 10px;
+            padding-bottom: 12px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 36px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.ring;
+                }
+            }
+            if root.title != "": Text {
+                text: root.title;
+                color: Theme.ink;
+                font-size: 17px;
+                font-weight: 600;
+                letter-spacing: -0.2px;
+                overflow: elide;
+                horizontal-alignment: center;
+                height: 48px;
+                vertical-alignment: center;
+            }
+            Flickable {
+                height: min(body.preferred-height, root.height - 200px);
+                content-height: body.preferred-height;
+                body := VerticalLayout {
+                    width: parent.width;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+// Пункт листа с иконкой.
+export component SheetItem inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <color> tint: Theme.ink;
+    callback clicked();
+    height: 52px;
+    background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 16px;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.icon; color: root.tint; size: 20px; }
+        }
+        Text {
+            text: root.text;
+            color: root.tint;
+            font-size: 15px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Нижняя панель вкладок.
+export component NavBar inherits Rectangle {
+    in property <string> current;
+    callback open(string);
+    height: 76px;
+    background: Theme.surface;
+    Rectangle {
+        height: 1px;
+        background: Theme.hair;
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        for tab in [
+            { id: "main", icon: "globe", text: "Серверы" },
+            { id: "routing", icon: "route", text: "Маршруты" },
+            { id: "subs", icon: "layers", text: "Подписки" },
+            { id: "settings", icon: "sliders", text: "Настройки" },
+        ]: Rectangle {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                HorizontalLayout {
+                    alignment: center;
+                    Icon {
+                        name: tab.icon;
+                        color: root.current == tab.id ? Theme.ink : Theme.ink2;
+                    }
+                }
+                Text {
+                    text: tab.text;
+                    color: root.current == tab.id ? Theme.ink : Theme.ink2;
+                    font-size: 11px;
+                    font-weight: root.current == tab.id ? 600 : 500;
+                    horizontal-alignment: center;
+                }
+            }
+            TouchArea { clicked => { root.open(tab.id); } }
+        }
     }
 }

@@ -96,6 +96,66 @@ impl Host for AndroidHost {
 
 static UI: OnceLock<Mutex<Option<slint::Weak<crate::MainWindow>>>> = OnceLock::new();
 
+/// Вызовы Java из ядра (процесс VPN): владелец соединения и UID приложения.
+struct JavaHooks {
+    vm: JavaVM,
+    class: GlobalRef,
+}
+
+impl JavaHooks {
+    fn call_int(&self, name: &str, sig: &str, args: &[JValue]) -> Option<i32> {
+        let mut env = self.vm.attach_current_thread().ok()?;
+        let cls = JClass::from(env.new_local_ref(self.class.as_obj()).ok()?);
+        match env.call_static_method(&cls, name, sig, args) {
+            Ok(v) => v.i().ok(),
+            Err(_) => {
+                let _ = env.exception_clear();
+                None
+            }
+        }
+    }
+}
+
+impl xd_core::tun::PlatformHooks for JavaHooks {
+    fn owner_uid(&self, tcp: bool, src: std::net::SocketAddr, dst: std::net::SocketAddr) -> Option<u32> {
+        let mut env = self.vm.attach_current_thread().ok()?;
+        let s = env.new_string(src.ip().to_string()).ok()?;
+        let d = env.new_string(dst.ip().to_string()).ok()?;
+        let args = [
+            JValue::Int(if tcp { 6 } else { 17 }),
+            JValue::Object(&s),
+            JValue::Int(src.port() as i32),
+            JValue::Object(&d),
+            JValue::Int(dst.port() as i32),
+        ];
+        let cls = JClass::from(env.new_local_ref(self.class.as_obj()).ok()?);
+        let r = match env.call_static_method(&cls, "ownerUid", "(ILjava/lang/String;ILjava/lang/String;I)I", &args) {
+            Ok(v) => v.i().ok(),
+            Err(_) => {
+                let _ = env.exception_clear();
+                None
+            }
+        }?;
+        (r >= 0).then_some(r as u32)
+    }
+
+    fn package_uid(&self, package: &str) -> Option<u32> {
+        let mut env = self.vm.attach_current_thread().ok()?;
+        let p = env.new_string(package).ok()?;
+        let cls = JClass::from(env.new_local_ref(self.class.as_obj()).ok()?);
+        let r = match env.call_static_method(&cls, "packageUid", "(Ljava/lang/String;)I", &[JValue::Object(&p)]) {
+            Ok(v) => v.i().ok(),
+            Err(_) => {
+                let _ = env.exception_clear();
+                None
+            }
+        }?;
+        (r >= 0).then_some(r as u32)
+    }
+}
+
+static HOOKS_ONCE: std::sync::Once = std::sync::Once::new();
+
 #[no_mangle]
 fn android_main(app: slint::android::AndroidApp) {
     let dir: PathBuf = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
@@ -132,9 +192,10 @@ pub extern "system" fn Java_com_xraydroid_XrayCore_nativeOnStatus(
     error: JString,
     up: jlong,
     down: jlong,
+    started_ms: jlong,
 ) {
     let err = jstr(&mut env, &error);
-    status::on_service(running != 0, &err, up as u64, down as u64);
+    status::on_service(running != 0, &err, up as u64, down as u64, started_ms);
     if let Some(w) = UI.get().and_then(|m| m.lock().clone()) {
         let _ = w.upgrade_in_event_loop(|ui| {
             crate::ui::apply_status(&ui, &std::cell::RefCell::new(None));
@@ -153,9 +214,14 @@ static SERVICE: Mutex<Option<ServiceState>> = Mutex::new(None);
 
 /// Читает настройки и возвращает JSON с параметрами для VpnService.Builder.
 #[no_mangle]
-pub extern "system" fn Java_com_xraydroid_XrayCore_nativePrepare(mut env: JNIEnv, _: JClass, files_dir: JString) -> jstring {
+pub extern "system" fn Java_com_xraydroid_XrayCore_nativePrepare(mut env: JNIEnv, class: JClass, files_dir: JString) -> jstring {
     let dir = PathBuf::from(jstr(&mut env, &files_dir));
     init_logging(&dir);
+    HOOKS_ONCE.call_once(|| {
+        if let (Ok(vm), Ok(class)) = (env.get_java_vm(), env.new_global_ref(&class)) {
+            xd_core::engine::set_platform_hooks(Arc::new(JavaHooks { vm, class }));
+        }
+    });
     let cfg = AppConfig::load(&dir.join("config.json"));
     let p = cfg.selected_profile().cloned();
     let s = &cfg.settings;

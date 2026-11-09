@@ -11,7 +11,7 @@ use xd_core::config::{OutboundTag, Profile, Subscription};
 use xd_core::route::presets::{apply_preset, PRESETS};
 
 use crate::state::{self, model, State};
-use crate::{status, Host, MainWindow};
+use crate::{status, Host, MainWindow, SplitForm};
 
 type S = Rc<RefCell<State>>;
 
@@ -25,6 +25,25 @@ pub fn fmt_bytes(b: f64) -> String {
     } else {
         format!("{:.2} ГБ", b / 1073741824.0)
     }
+}
+
+/// Скорость для плитки: («2,4», «МБ/с»).
+pub fn speed_parts(bps: f64) -> (String, String) {
+    let ru = |v: f64, digits: usize| format!("{v:.digits$}").replace('.', ",");
+    if bps < 1024.0 {
+        (ru(bps, 0), "Б/с".into())
+    } else if bps < 1024.0 * 1024.0 {
+        let v = bps / 1024.0;
+        (ru(v, if v >= 100.0 { 0 } else { 1 }), "КБ/с".into())
+    } else {
+        let v = bps / 1048576.0;
+        (ru(v, if v >= 100.0 { 0 } else { 1 }), "МБ/с".into())
+    }
+}
+
+fn fmt_uptime(secs: i64) -> String {
+    let s = secs.max(0);
+    format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
 }
 
 fn toast(ui: &MainWindow, text: &str) {
@@ -48,6 +67,7 @@ fn refresh_servers(ui: &MainWindow, st: &State) {
     ui.set_current_group(idx as i32);
     ui.set_servers(model(st.server_items()));
     ui.set_selected_name(st.cfg.selected_profile().map(|p| p.display_name()).unwrap_or_default().into());
+    ui.set_selected_proto(st.cfg.selected_profile().map(|p| p.protocol.name()).unwrap_or_default().into());
 }
 
 fn refresh_routing(ui: &MainWindow, st: &State) {
@@ -59,7 +79,21 @@ fn refresh_routing(ui: &MainWindow, st: &State) {
     });
     ui.set_final_index(st.cfg.routing.final_outbound.index());
     ui.set_preset_index(PRESETS.iter().position(|(id, _)| *id == st.cfg.routing.preset).unwrap_or(0) as i32);
+    ui.set_splits(model(st.split_items()));
     ui.set_geo_status(st.geo_status().into());
+}
+
+fn refresh_split_apps(ui: &MainWindow, st: &State) {
+    let (items, more) = st.split_app_items();
+    ui.set_split_apps_count(st.split_apps.len() as i32);
+    ui.set_split_apps(model(items));
+    ui.set_split_apps_more(more.into());
+}
+
+fn refresh_apps(ui: &MainWindow, st: &State) {
+    let (items, more) = st.app_items();
+    ui.set_apps(model(items));
+    ui.set_apps_more(more.into());
 }
 
 /// Перезапуск VPN, если он запущен (после смены сервера/настроек).
@@ -169,6 +203,9 @@ fn update_subs(ui: &MainWindow, st: &S, _host: &Arc<dyn Host>, only: Option<Stri
                                 if let Some(sub) = s.cfg.subscriptions.iter_mut().find(|x| x.id == id) {
                                     sub.last_update = state::now_secs();
                                     sub.info = upd.info;
+                                    sub.used = upd.usage.used;
+                                    sub.total = upd.usage.total;
+                                    sub.expire = upd.usage.expire;
                                     if let (Some(t), false) = (upd.title, sub.custom_name) {
                                         sub.remarks = t;
                                     }
@@ -250,9 +287,23 @@ fn run_delay_tests(ui: &MainWindow, st: &S, ids: Vec<String>) {
 
 fn load_apps(ui: &MainWindow, st: &S, host: &Arc<dyn Host>) {
     if st.borrow().apps_loaded {
-        ui.set_apps(model(st.borrow().app_items()));
+        refresh_apps(ui, &st.borrow());
+        refresh_split_apps(ui, &st.borrow());
         return;
     }
+    // на десктопе (скриншоты) список отдаётся мгновенно
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut s = st.borrow_mut();
+        s.apps = host.installed_apps();
+        s.apps_loaded = true;
+        refresh_apps(ui, &s);
+        refresh_split_apps(ui, &s);
+        ui.set_splits(model(s.split_items()));
+        return;
+    }
+    #[allow(unreachable_code)]
+    {
     ui.set_apps_loading(true);
     let w = ui.as_weak();
     let host = host.clone();
@@ -263,11 +314,14 @@ fn load_apps(ui: &MainWindow, st: &S, host: &Arc<dyn Host>) {
                 let mut s = st.borrow_mut();
                 s.apps = apps;
                 s.apps_loaded = true;
-                ui.set_apps(model(s.app_items()));
+                refresh_apps(&ui, &s);
+                refresh_split_apps(&ui, &s);
+                ui.set_splits(model(s.split_items()));
                 ui.set_apps_loading(false);
             });
         });
     });
+    }
 }
 
 pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::PlatformError> {
@@ -319,24 +373,20 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
     {
         let s = st.clone();
         let w = ui.as_weak();
-        ui.on_test_connection(move || {
+        ui.on_test_all(move || {
             let ui = w.unwrap();
-            let Some(p) = s.borrow().cfg.selected_profile().cloned() else { return };
-            let url = s.borrow().cfg.settings.test_url.clone();
-            ui.set_status_text("Проверка соединения…".into());
-            let w = ui.as_weak();
-            xd_core::engine::shared_runtime().spawn(async move {
-                let r = xd_core::engine::delay_test(&p, &url).await;
-                let _ = w.upgrade_in_event_loop(move |ui| {
-                    let text = match r {
-                        Ok(ms) => format!("Успешно: соединение заняло {ms} мс"),
-                        Err(e) => format!("Ошибка: {e}"),
-                    };
-                    status::set_message(&text);
-                    ui.set_status_text(text.into());
-                });
-            });
+            let ids = s.borrow().group_ids();
+            if ids.is_empty() {
+                toast(&ui, "Нет серверов для проверки");
+            } else {
+                run_delay_tests(&ui, &s, ids);
+            }
         });
+    }
+    {
+        let s = st.clone();
+        let w = ui.as_weak();
+        ui.on_test_server(move |id| run_delay_tests(&w.unwrap(), &s, vec![id.to_string()]));
     }
     {
         let s = st.clone();
@@ -491,15 +541,26 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 let st = s.borrow();
                 match p.as_str() {
                     "main" => refresh_servers(&ui, &st),
-                    "subs" => ui.set_subs(model(st.sub_items())),
+                    "subs" => {
+                        ui.set_subs(model(st.sub_items()));
+                        ui.set_sub_auto(st.cfg.settings.sub_auto_update);
+                    }
                     "routing" => refresh_routing(&ui, &st),
-                    "settings" => ui.set_settings(state::settings_to_form(&st.cfg.settings)),
+                    "settings" => {
+                        ui.set_settings(state::settings_to_form(&st.cfg.settings));
+                        ui.set_apps_summary(st.apps_summary().into());
+                    }
+                    "advanced" => ui.set_settings(state::settings_to_form(&st.cfg.settings)),
                     "apps" => ui.set_apps_mode(st.cfg.settings.per_app_mode),
                     "logs" => ui.set_logs(state::strings(xd_core::logbuf::tail_file(400))),
                     _ => {}
                 }
             }
             if p.as_str() == "apps" && s.borrow().cfg.settings.per_app_mode != 0 {
+                load_apps(&ui, &s, &h);
+            }
+            // названия приложений для значков в списке отдельных серверов
+            if p.as_str() == "routing" && s.borrow().cfg.splits.iter().any(|x| !x.apps.is_empty()) {
                 load_apps(&ui, &s, &h);
             }
             ui.set_page(p);
@@ -546,7 +607,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                     ui.set_subs(model(st.sub_items()));
                 }
                 "apply-preset" => {
-                    let i = ui.get_preset_index().clamp(0, PRESETS.len() as i32 - 1) as usize;
+                    let i = arg.parse::<usize>().unwrap_or(0).min(PRESETS.len() - 1);
                     apply_preset(&mut st.cfg.routing, PRESETS[i].0);
                     st.save();
                     refresh_routing(&ui, &st);
@@ -559,6 +620,14 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                     st.save();
                     refresh_routing(&ui, &st);
                     ui.set_page("routing".into());
+                }
+                "delete-split" => {
+                    st.cfg.splits.retain(|x| x.id != arg);
+                    st.save();
+                    refresh_routing(&ui, &st);
+                    ui.set_page("routing".into());
+                    drop(st);
+                    restart_if_running(&h);
                 }
                 _ => {}
             }
@@ -687,12 +756,26 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
         });
     }
     {
+        let w = ui.as_weak();
+        ui.on_sub_new(move || {
+            let ui = w.unwrap();
+            ui.set_sub_id(SharedString::new());
+            ui.set_sub_name(SharedString::new());
+            ui.set_sub_url(SharedString::new());
+            ui.set_sub_dialog(true);
+        });
+    }
+    {
         let s = st.clone();
-        ui.on_sub_toggle(move |id, v| {
+        let h = host.clone();
+        let w = ui.as_weak();
+        ui.on_sub_refresh(move |id| update_subs(&w.unwrap(), &s, &h, Some(id.to_string())));
+    }
+    {
+        let s = st.clone();
+        ui.on_sub_auto_changed(move |v| {
             let mut st = s.borrow_mut();
-            if let Some(x) = st.cfg.subscriptions.iter_mut().find(|x| x.id == id.as_str()) {
-                x.enabled = v;
-            }
+            st.cfg.settings.sub_auto_update = v;
             st.save();
         });
     }
@@ -824,6 +907,119 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
         });
     }
 
+    // ── маршруты на отдельные серверы ──
+    {
+        let s = st.clone();
+        let h = host.clone();
+        let w = ui.as_weak();
+        ui.on_split_open(move |id| {
+            let ui = w.unwrap();
+            {
+                let mut st = s.borrow_mut();
+                match st.cfg.splits.iter().find(|x| x.id == id.as_str()).cloned() {
+                    Some(sp) => {
+                        ui.set_split_form(state::split_to_form(&sp));
+                        ui.set_split_is_new(false);
+                        st.split_apps = sp.apps.iter().cloned().collect();
+                        st.split_server = sp.server.clone();
+                    }
+                    None => {
+                        ui.set_split_form(SplitForm::default());
+                        ui.set_split_is_new(true);
+                        st.split_apps.clear();
+                        st.split_server.clear();
+                    }
+                }
+                st.split_filter.clear();
+                ui.set_split_filter(SharedString::new());
+                ui.set_split_servers(model(st.split_server_items()));
+                refresh_split_apps(&ui, &st);
+            }
+            load_apps(&ui, &s, &h);
+            ui.set_page("split".into());
+            ui.invoke_focus_keys();
+        });
+    }
+    {
+        let s = st.clone();
+        let w = ui.as_weak();
+        ui.on_split_pick_server(move |id| {
+            let ui = w.unwrap();
+            let mut st = s.borrow_mut();
+            st.split_server = id.to_string();
+            ui.set_split_servers(model(st.split_server_items()));
+        });
+    }
+    {
+        let s = st.clone();
+        let w = ui.as_weak();
+        ui.on_split_app_toggle(move |pkg, v| {
+            let ui = w.unwrap();
+            let mut st = s.borrow_mut();
+            if v {
+                st.split_apps.insert(pkg.to_string());
+            } else {
+                st.split_apps.remove(pkg.as_str());
+            }
+            refresh_split_apps(&ui, &st);
+        });
+    }
+    {
+        let s = st.clone();
+        let w = ui.as_weak();
+        ui.on_split_filter_changed(move |f| {
+            let ui = w.unwrap();
+            let mut st = s.borrow_mut();
+            st.split_filter = f.to_string();
+            refresh_split_apps(&ui, &st);
+        });
+    }
+    {
+        let s = st.clone();
+        let h = host.clone();
+        let w = ui.as_weak();
+        ui.on_split_save(move || {
+            let ui = w.unwrap();
+            let f = ui.get_split_form();
+            let res = {
+                let st = s.borrow();
+                let enabled = st.cfg.splits.iter().find(|x| x.id == f.id.as_str()).map(|x| x.enabled).unwrap_or(true);
+                state::form_to_split(&f, &st.split_server, &st.split_apps, enabled)
+            };
+            match res {
+                Ok(sp) => {
+                    {
+                        let mut st = s.borrow_mut();
+                        match st.cfg.splits.iter_mut().find(|x| x.id == sp.id) {
+                            Some(x) => *x = sp,
+                            None => st.cfg.splits.push(sp),
+                        }
+                        st.save();
+                        refresh_routing(&ui, &st);
+                    }
+                    ui.set_page("routing".into());
+                    ui.invoke_focus_keys();
+                    toast(&ui, "Маршрут сохранён");
+                    restart_if_running(&h);
+                }
+                Err(e) => toast(&ui, &e),
+            }
+        });
+    }
+    {
+        let s = st.clone();
+        let h = host.clone();
+        ui.on_split_toggle(move |id, v| {
+            let mut st = s.borrow_mut();
+            if let Some(x) = st.cfg.splits.iter_mut().find(|x| x.id == id.as_str()) {
+                x.enabled = v;
+            }
+            st.save();
+            drop(st);
+            restart_if_running(&h);
+        });
+    }
+
     // ── настройки ──
     {
         let s = st.clone();
@@ -834,9 +1030,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             let f = ui.get_settings();
             state::form_to_settings(&f, &mut st.cfg.settings);
             st.save();
-            ui.set_settings(state::settings_to_form(&st.cfg.settings));
-            drop(st);
-            toast(&ui, "Настройки сохранены");
+            ui.set_apps_summary(st.apps_summary().into());
         });
     }
 
@@ -855,6 +1049,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             if m != 0 {
                 load_apps(&ui, &s, &h);
             }
+            refresh_apps(&ui, &s.borrow());
         });
     }
     {
@@ -864,7 +1059,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             let ui = w.unwrap();
             let mut st = s.borrow_mut();
             st.apps_filter = f.to_string();
-            ui.set_apps(model(st.app_items()));
+            refresh_apps(&ui, &st);
         });
     }
     {
@@ -879,7 +1074,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 list.push(pkg.to_string());
             }
             st.save();
-            ui.set_apps(model(st.app_items()));
+            refresh_apps(&ui, &st);
         });
     }
     {
@@ -888,14 +1083,14 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
         ui.on_apps_select_all(move |v| {
             let ui = w.unwrap();
             let mut st = s.borrow_mut();
-            let visible: Vec<String> = st.app_items().iter().map(|a| a.pkg.to_string()).collect();
+            let visible: Vec<String> = st.app_items().0.iter().map(|a| a.pkg.to_string()).collect();
             let list = &mut st.cfg.settings.per_app_list;
             list.retain(|p| !visible.contains(p));
             if v {
                 list.extend(visible);
             }
             st.save();
-            ui.set_apps(model(st.app_items()));
+            refresh_apps(&ui, &st);
         });
     }
 
@@ -919,11 +1114,6 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             toast(&w.unwrap(), "Журнал скопирован");
         });
     }
-    {
-        let h = host.clone();
-        ui.on_copy_text(move |t| h.set_clipboard(&t));
-    }
-
     // ── автообновление подписок старше суток ──
     {
         let stale = st
@@ -932,7 +1122,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             .subscriptions
             .iter()
             .any(|x| x.enabled && state::now_secs() - x.last_update > 24 * 3600);
-        if stale {
+        if stale && st.borrow().cfg.settings.sub_auto_update {
             let s = st.clone();
             let h = host.clone();
             let w = ui.as_weak();
@@ -952,36 +1142,45 @@ pub fn apply_status(ui: &MainWindow, last: &RefCell<Option<(u64, u64, std::time:
     let s = status::get();
     ui.set_running(s.running);
     ui.set_connecting(s.connecting);
+    ui.set_status_error(false);
     if s.connecting {
-        ui.set_status_text(if s.running { "Отключение…" } else { "Подключение…" }.into());
-        ui.set_speed_text(SharedString::new());
+        ui.set_status_title(if s.running { "Отключение…" } else { "Подключение…" }.into());
+        ui.set_status_sub("Подождите".into());
         return;
     }
     if !s.error.is_empty() {
-        ui.set_status_text(format!("Ошибка: {}", s.error).into());
-    } else if !s.message.is_empty() {
-        ui.set_status_text(s.message.clone().into());
+        ui.set_status_error(true);
+        ui.set_status_title("Ошибка".into());
+        ui.set_status_sub(s.error.clone().into());
     } else if s.running {
-        ui.set_status_text("Подключено, нажмите для проверки соединения".into());
+        ui.set_status_title("Защищено".into());
+        let secs = if s.started_ms > 0 { (state::now_secs() * 1000 - s.started_ms) / 1000 } else { 0 };
+        ui.set_status_sub(fmt_uptime(secs).into());
     } else {
-        ui.set_status_text("Не подключено".into());
+        ui.set_status_title("Не подключено".into());
+        ui.set_status_sub("Нажмите, чтобы подключиться".into());
     }
     if s.running {
         let now = std::time::Instant::now();
         let mut l = last.borrow_mut();
-        let speed = match *l {
-            Some((u, d, t)) if s.up >= u && s.down >= d => {
+        if let Some((u, d, t)) = *l {
+            if s.up >= u && s.down >= d {
                 let dt = now.duration_since(t).as_secs_f64().max(0.2);
-                format!("↑ {}/с  ↓ {}/с", fmt_bytes((s.up - u) as f64 / dt), fmt_bytes((s.down - d) as f64 / dt))
+                let (dv, du) = speed_parts((s.down - d) as f64 / dt);
+                let (uv, uu) = speed_parts((s.up - u) as f64 / dt);
+                ui.set_down_value(dv.into());
+                ui.set_down_unit(du.into());
+                ui.set_up_value(uv.into());
+                ui.set_up_unit(uu.into());
             }
-            _ => String::new(),
-        };
+        }
         *l = Some((s.up, s.down, now));
-        let total = format!("всего ↑ {}  ↓ {}", fmt_bytes(s.up as f64), fmt_bytes(s.down as f64));
-        ui.set_speed_text(if speed.is_empty() { total } else { format!("{speed} · {total}") }.into());
     } else {
         *last.borrow_mut() = None;
-        ui.set_speed_text(SharedString::new());
+        ui.set_down_value("0".into());
+        ui.set_down_unit("КБ/с".into());
+        ui.set_up_value("0".into());
+        ui.set_up_unit("КБ/с".into());
     }
 }
 

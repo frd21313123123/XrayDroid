@@ -42,6 +42,15 @@ pub struct SubUpdate {
     pub title: Option<String>,
     /// Трафик и срок из subscription-userinfo, в читаемом виде
     pub info: String,
+    pub usage: UserInfo,
+}
+
+/// Числа из заголовка `subscription-userinfo`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UserInfo {
+    pub used: u64,
+    pub total: u64,
+    pub expire: i64,
 }
 
 fn fmt_gb(b: u64) -> String {
@@ -49,7 +58,7 @@ fn fmt_gb(b: u64) -> String {
 }
 
 /// Разбор заголовка `subscription-userinfo: upload=..; download=..; total=..; expire=..`.
-pub fn parse_userinfo(v: &str) -> String {
+pub fn parse_userinfo_raw(v: &str) -> UserInfo {
     let mut up = 0u64;
     let mut down = 0u64;
     let mut total = 0u64;
@@ -66,8 +75,13 @@ pub fn parse_userinfo(v: &str) -> String {
             }
         }
     }
+    UserInfo { used: up + down, total, expire }
+}
+
+/// То же в читаемом виде.
+pub fn parse_userinfo(v: &str) -> String {
+    let UserInfo { used, total, expire } = parse_userinfo_raw(v);
     let mut out = Vec::new();
-    let used = up + down;
     if total > 0 {
         out.push(format!("трафик {} из {}", fmt_gb(used), fmt_gb(total)));
     } else if used > 0 {
@@ -106,6 +120,7 @@ pub fn update(sub: &Subscription, user_agent: &str) -> io::Result<SubUpdate> {
         profiles: list,
         title: h("profile-title").map(|v| decode_title(&v)).filter(|t| !t.is_empty()),
         info: h("subscription-userinfo").map(|v| parse_userinfo(&v)).unwrap_or_default(),
+        usage: h("subscription-userinfo").map(|v| parse_userinfo_raw(&v)).unwrap_or_default(),
     })
 }
 

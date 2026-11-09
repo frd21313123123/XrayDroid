@@ -5,8 +5,8 @@ use crate::config::{OutboundTag, RoutingConfig, RoutingRule};
 pub const DEFAULT_PRESET: &str = "ru_bypass";
 
 pub const PRESETS: &[(&str, &str)] = &[
-    ("ru_bypass", "Россия напрямую, остальное через прокси"),
-    ("ru_blocked", "Через прокси только заблокированное в РФ"),
+    ("ru_bypass", "Россия напрямую"),
+    ("ru_blocked", "Только заблокированное в РФ"),
     ("bypass_lan", "Обход локальной сети"),
     ("global", "Всё через прокси"),
     ("direct", "Всё напрямую"),
