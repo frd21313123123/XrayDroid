@@ -11,6 +11,12 @@ fn main() {
     xd_core::logbuf::init(None, true);
     xd_core::logbuf::set_sink(|l| eprintln!("{l}"));
     let a: Vec<String> = std::env::args().collect();
+    if a[1] == "sub" {
+        let sub = xd_core::Subscription { id: "s".into(), url: a[2].clone(), enabled: true, ..Default::default() };
+        let r = xd_core::subscription::update(&sub, "v2rayNG/1.10.0").unwrap();
+        println!("servers={} title={:?} info={:?}", r.profiles.len(), r.title, r.info);
+        return;
+    }
     let p = xd_core::links::parse_link(&a[2]).expect("bad link");
     match a[1].as_str() {
         "socks" => {

@@ -102,6 +102,10 @@ pub struct Subscription {
     pub url: String,
     pub enabled: bool,
     pub last_update: i64,
+    /// Трафик/срок из заголовка subscription-userinfo
+    pub info: String,
+    /// Название задано пользователем (не перезаписывать profile-title)
+    pub custom_name: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

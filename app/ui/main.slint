@@ -1,0 +1,1374 @@
+// Главное окно XrayDroid: список серверов, редактор, подписки, маршрутизация,
+// настройки, прокси для приложений, журнал.
+
+import { LineEdit, TextEdit, Switch, ComboBox, ListView, ScrollView, CheckBox, Spinner } from "std-widgets.slint";
+import { Theme, Icon, Logo, IconButton, TopBar, Card, SectionTitle, Hint, Chip, MenuItem, Badge, FlatButton, AccentButton } from "widgets.slint";
+
+export { Theme }
+
+export struct ServerItem {
+    id: string,
+    name: string,
+    info: string,
+    kind: string,
+    delay: string,
+    // 0 — нет, 1 — хорошо, 2 — средне, 3 — ошибка, 4 — тестируется
+    delay-state: int,
+    selected: bool,
+}
+
+export struct SubItem {
+    id: string,
+    name: string,
+    url: string,
+    enabled: bool,
+    info: string,
+}
+
+export struct RuleItem {
+    id: string,
+    name: string,
+    summary: string,
+    outbound: int,
+    enabled: bool,
+}
+
+export struct AppItem {
+    pkg: string,
+    label: string,
+    checked: bool,
+}
+
+export struct ProfileForm {
+    id: string,
+    protocol: int,
+    remarks: string,
+    address: string,
+    port: string,
+    uuid: string,
+    username: string,
+    method: string,
+    method-index: int,
+    flow: int,
+    network: int,
+    header-type: string,
+    host: string,
+    path: string,
+    security: int,
+    sni: string,
+    alpn: string,
+    fingerprint: string,
+    allow-insecure: bool,
+    public-key: string,
+    short-id: string,
+    spider-x: string,
+}
+
+export struct RuleForm {
+    id: string,
+    name: string,
+    outbound: int,
+    enabled: bool,
+    domain: string,
+    ip: string,
+    port: string,
+    network: int,
+    protocol: string,
+}
+
+export struct SettingsForm {
+    fake-dns: bool,
+    sniffing: bool,
+    ipv6: bool,
+    local-socks: bool,
+    socks-port: string,
+    block-quic: bool,
+    allow-insecure: bool,
+    dns: string,
+    mtu: string,
+    test-url: string,
+    ua: string,
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in-out property <string> text;
+    in property <InputType> input-type: InputType.text;
+    callback edited(string);
+    spacing: 2px;
+    Text {
+        text: root.label;
+        color: Theme.text2;
+        font-size: 12px;
+    }
+    LineEdit {
+        text: root.text;
+        placeholder-text: root.placeholder;
+        input-type: root.input-type;
+        edited(t) => {
+            root.text = t;
+            root.edited(t);
+        }
+    }
+}
+
+component Choice inherits VerticalLayout {
+    in property <string> label;
+    in property <[string]> model;
+    in-out property <int> current-index;
+    callback selected(int);
+    spacing: 2px;
+    Text {
+        text: root.label;
+        color: Theme.text2;
+        font-size: 12px;
+    }
+    ComboBox {
+        model: root.model;
+        current-index <=> root.current-index;
+        selected => { root.selected(self.current-index); }
+    }
+}
+
+component Toggle inherits HorizontalLayout {
+    in property <string> text;
+    in property <string> hint;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    padding-top: 6px;
+    padding-bottom: 6px;
+    spacing: 10px;
+    HorizontalLayout {
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.text;
+                color: Theme.text;
+                font-size: 15px;
+                wrap: word-wrap;
+            }
+            if root.hint != "": Hint { text: root.hint; }
+        }
+        VerticalLayout {
+            alignment: center;
+            Switch {
+                checked <=> root.checked;
+                toggled => { root.toggled(self.checked); }
+            }
+        }
+    }
+}
+
+component ServerCard inherits Rectangle {
+    in property <ServerItem> item;
+    callback select();
+    callback share();
+    callback edit();
+    callback remove();
+    height: 78px;
+    Card {
+        x: 8px;
+        y: 4px;
+        width: parent.width - 16px;
+        height: parent.height - 8px;
+        background: ta.pressed ? Theme.card-pressed : Theme.card;
+        clip: true;
+        ta := TouchArea {
+            clicked => { root.select(); }
+        }
+        HorizontalLayout {
+            Rectangle {
+                width: 5px;
+                background: root.item.selected ? Theme.accent : transparent;
+            }
+            VerticalLayout {
+                padding-left: 12px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 4px;
+                horizontal-stretch: 1;
+                Text {
+                    text: root.item.name;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: root.item.selected ? 700 : 600;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.item.info;
+                    color: Theme.text2;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                padding-right: 6px;
+                padding-top: 2px;
+                padding-bottom: 6px;
+                alignment: space-between;
+                HorizontalLayout {
+                    alignment: end;
+                    IconButton { icon: "share"; tint: Theme.text2; width: 36px; height: 36px; clicked => { root.share(); } }
+                    IconButton { icon: "edit"; tint: Theme.text2; width: 36px; height: 36px; clicked => { root.edit(); } }
+                    IconButton { icon: "delete"; tint: Theme.text2; width: 36px; height: 36px; clicked => { root.remove(); } }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+                    padding-right: 6px;
+                    Text {
+                        text: root.item.kind;
+                        color: Theme.text2;
+                        font-size: 12px;
+                    }
+                    Text {
+                        text: root.item.delay;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: root.item.delay-state == 1 ? Theme.good : root.item.delay-state == 2 ? Theme.warn : root.item.delay-state == 3 ? Theme.bad : Theme.text2;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component OutboundBadge inherits Badge {
+    in property <int> outbound;
+    text: outbound == 0 ? "ПРОКСИ" : outbound == 1 ? "НАПРЯМУЮ" : "БЛОК";
+    tint: outbound == 0 ? Theme.proxy : outbound == 1 ? Theme.direct : Theme.block;
+}
+
+component DialogFrame inherits Rectangle {
+    in property <string> title;
+    callback dismiss();
+    background: #00000088;
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+    Card {
+        x: 20px;
+        width: parent.width - 40px;
+        y: max(24px, (parent.height - self.height) / 3);
+        height: lay.preferred-height;
+        border-radius: 10px;
+        TouchArea { }
+        lay := VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+            @children
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "XrayDroid";
+    background: Theme.bg;
+    preferred-width: 400px;
+    preferred-height: 820px;
+    default-font-size: 14px;
+
+    // ── навигация ──
+    in-out property <string> page: "main";
+    in-out property <bool> drawer-open;
+    in property <string> version;
+
+    // ── главный экран ──
+    in property <[ServerItem]> servers;
+    in property <[string]> groups;
+    in-out property <int> current-group;
+    in property <bool> running;
+    in property <bool> connecting;
+    in property <string> status-text: "Не подключено";
+    in property <string> speed-text;
+    in property <string> selected-name;
+
+    // ── уведомление и диалоги ──
+    in property <string> toast-text;
+    in property <bool> toast-visible;
+    in-out property <bool> confirm-visible;
+    in-out property <string> confirm-text;
+    in-out property <string> confirm-action;
+    in-out property <bool> paste-visible;
+    in-out property <string> paste-text;
+
+    // ── редактор сервера ──
+    in-out property <ProfileForm> form;
+    in-out property <bool> form-is-new;
+
+    // ── подписки ──
+    in property <[SubItem]> subs;
+    in property <bool> subs-busy;
+    in-out property <bool> sub-dialog;
+    in-out property <string> sub-id;
+    in-out property <string> sub-name;
+    in-out property <string> sub-url;
+
+    // ── маршрутизация ──
+    in property <[string]> presets;
+    in-out property <int> preset-index;
+    in-out property <int> strategy-index;
+    in-out property <int> final-index;
+    in property <[RuleItem]> rules;
+    in property <string> geo-status;
+    in property <bool> geo-busy;
+    in-out property <RuleForm> rule-form;
+    in-out property <bool> rule-is-new;
+
+    // ── настройки ──
+    in-out property <SettingsForm> settings;
+
+    // ── приложения ──
+    in property <[AppItem]> apps;
+    in property <bool> apps-loading;
+    in-out property <int> apps-mode;
+    in-out property <string> apps-filter;
+
+    // ── журнал ──
+    in property <[string]> logs;
+
+    callback toggle-vpn();
+    callback test-connection();
+    callback select-server(string);
+    callback edit-server(string);
+    callback share-server(string);
+    callback delete-server(string);
+    callback add-manual(int);
+    callback import-clipboard();
+    callback import-text(string);
+    callback menu-action(string);
+    callback group-changed(int);
+    callback open-page(string);
+    callback confirm-ok(string);
+    callback form-save();
+    callback form-protocol-changed(int);
+
+    callback sub-save();
+    callback sub-delete(string);
+    callback sub-edit(string);
+    callback sub-toggle(string, bool);
+    callback subs-update();
+
+    callback routing-apply-preset(int);
+    callback routing-changed();
+    callback rule-open(string);
+    callback rule-toggle(string, bool);
+    callback rule-save();
+    callback rule-delete(string);
+    callback rule-move(string, int);
+    callback geo-download();
+
+    callback settings-save();
+    callback apps-mode-changed(int);
+    callback apps-filter-changed(string);
+    callback app-toggle(string, bool);
+    callback apps-select-all(bool);
+    callback logs-refresh();
+    callback logs-clear();
+    callback logs-copy();
+    callback copy-text(string);
+
+    public function focus-keys() {
+        keys.focus();
+    }
+
+    function go-back() {
+        if (root.drawer-open) {
+            root.drawer-open = false;
+        } else if (root.page == "rule") {
+            root.open-page("routing");
+        } else if (root.page != "main") {
+            root.open-page("main");
+        }
+    }
+
+    property <length> kb: self.virtual-keyboard-size.height;
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Back || e.text == Key.Escape) {
+                if (root.page == "main" && !root.drawer-open && !root.confirm-visible && !root.paste-visible && !root.sub-dialog) {
+                    return reject;
+                }
+                if (root.confirm-visible) { root.confirm-visible = false; return accept; }
+                if (root.paste-visible) { root.paste-visible = false; return accept; }
+                if (root.sub-dialog) { root.sub-dialog = false; return accept; }
+                root.go-back();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding-top: root.safe-area-insets.top;
+            padding-bottom: max(root.safe-area-insets.bottom, root.kb);
+            padding-left: root.safe-area-insets.left;
+            padding-right: root.safe-area-insets.right;
+
+            // ═══════════════ ГЛАВНЫЙ ЭКРАН ═══════════════
+            if root.page == "main": VerticalLayout {
+                Rectangle {
+                    background: Theme.primary;
+                    height: root.groups.length > 1 ? 96px : 56px;
+                    VerticalLayout {
+                        TopBar {
+                            title: "XrayDroid";
+                            subtitle: root.selected-name;
+                            show-back: false;
+                            drop-shadow-blur: 0px;
+                            menu => { root.drawer-open = true; }
+                            IconButton {
+                                icon: "plus";
+                                clicked => { add-menu.show(); }
+                            }
+                            IconButton {
+                                icon: "more";
+                                clicked => { more-menu.show(); }
+                            }
+                        }
+                        if root.groups.length > 1: Flickable {
+                            height: 40px;
+                            content-width: tabs.preferred-width;
+                            interactive: true;
+                            tabs := HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                for g[i] in root.groups: Chip {
+                                    text: g;
+                                    active: i == root.current-group;
+                                    clicked => {
+                                        root.current-group = i;
+                                        root.group-changed(i);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    if root.servers.length == 0: VerticalLayout {
+                        alignment: center;
+                        padding: 32px;
+                        spacing: 12px;
+                        Text {
+                            text: "Серверов пока нет";
+                            color: Theme.text;
+                            font-size: 18px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                        }
+                        Hint {
+                            text: "Скопируйте ссылку на сервер (vless://, vmess://, trojan://, ss://) или на подписку (https://…) и нажмите «Импорт из буфера обмена».";
+                            horizontal-alignment: center;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            AccentButton {
+                                text: "Импорт из буфера обмена";
+                                clicked => { root.import-clipboard(); }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            FlatButton {
+                                text: "Добавить подписку";
+                                clicked => {
+                                    root.sub-id = "";
+                                    root.sub-name = "";
+                                    root.sub-url = "";
+                                    root.sub-dialog = true;
+                                }
+                            }
+                        }
+                    }
+                    ListView {
+                        visible: root.servers.length > 0;
+                        for s in root.servers: ServerCard {
+                            item: s;
+                            select => { root.select-server(s.id); }
+                            share => { root.share-server(s.id); }
+                            edit => { root.edit-server(s.id); }
+                            remove => {
+                                root.confirm-text = "Удалить сервер «" + s.name + "»?";
+                                root.confirm-action = "delete-server:" + s.id;
+                                root.confirm-visible = true;
+                            }
+                        }
+                    }
+                }
+                // нижняя панель статуса
+                Rectangle {
+                    height: 60px;
+                    background: Theme.card;
+                    drop-shadow-blur: 6px;
+                    drop-shadow-color: #00000030;
+                    status-ta := TouchArea {
+                        clicked => { root.test-connection(); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 96px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: root.status-text;
+                                color: root.running ? Theme.text : Theme.text2;
+                                font-size: 14px;
+                                overflow: elide;
+                            }
+                            if root.speed-text != "": Text {
+                                text: root.speed-text;
+                                color: Theme.text2;
+                                font-size: 12px;
+                            }
+                        }
+                    }
+                    // кнопка подключения
+                    Rectangle {
+                        x: parent.width - 16px - self.width;
+                        y: -self.height / 2 + 2px;
+                        width: 60px;
+                        height: 60px;
+                        border-radius: 30px;
+                        background: root.running ? Theme.accent : Theme.fab-idle;
+                        opacity: root.connecting ? 0.7 : 1;
+                        drop-shadow-blur: 8px;
+                        drop-shadow-offset-y: 3px;
+                        drop-shadow-color: #00000055;
+                        animate background { duration: 250ms; }
+                        if !root.connecting: Logo { }
+                        if root.connecting: Spinner {
+                            width: 30px;
+                            height: 30px;
+                            indeterminate: true;
+                        }
+                        fab-ta := TouchArea {
+                            clicked => { root.toggle-vpn(); }
+                        }
+                    }
+                }
+            }
+
+            // ═══════════════ РЕДАКТОР СЕРВЕРА ═══════════════
+            if root.page == "edit": VerticalLayout {
+                TopBar {
+                    title: root.form-is-new ? "Новый сервер" : "Сервер";
+                    subtitle: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS"][root.form.protocol];
+                    back => { root.open-page("main"); }
+                    IconButton {
+                        icon: "check";
+                        clicked => { root.form-save(); }
+                    }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+                        SectionTitle { text: "ОСНОВНОЕ"; }
+                        Choice {
+                            label: "Протокол";
+                            model: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS"];
+                            current-index: root.form.protocol;
+                            selected(i) => { root.form.protocol = i; root.form-protocol-changed(i); }
+                        }
+                        Field { label: "Название"; text: root.form.remarks; edited(t) => { root.form.remarks = t; } }
+                        Field { label: "Адрес"; placeholder: "example.com или IP"; text: root.form.address; edited(t) => { root.form.address = t; } }
+                        Field { label: "Порт"; input-type: InputType.number; text: root.form.port; edited(t) => { root.form.port = t; } }
+                        if root.form.protocol <= 1: Field {
+                            label: "UUID (id)";
+                            text: root.form.uuid;
+                            edited(t) => { root.form.uuid = t; }
+                        }
+                        if root.form.protocol == 0: Choice {
+                            label: "Flow";
+                            model: ["нет", "xtls-rprx-vision"];
+                            current-index: root.form.flow;
+                            selected(i) => { root.form.flow = i; }
+                        }
+                        if root.form.protocol == 1: Choice {
+                            label: "Шифрование (security)";
+                            model: ["auto", "aes-128-gcm", "chacha20-poly1305"];
+                            current-index: root.form.method-index;
+                            selected(i) => {
+                                root.form.method-index = i;
+                                root.form.method = ["auto", "aes-128-gcm", "chacha20-poly1305"][i];
+                            }
+                        }
+                        if root.form.protocol == 3: Choice {
+                            label: "Метод шифрования";
+                            model: ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"];
+                            current-index: root.form.method-index;
+                            selected(i) => {
+                                root.form.method-index = i;
+                                root.form.method = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"][i];
+                            }
+                        }
+                        if root.form.protocol == 4: Field {
+                            label: "Логин (необязательно)";
+                            text: root.form.username;
+                            edited(t) => { root.form.username = t; }
+                        }
+                        if root.form.protocol >= 2: Field {
+                            label: "Пароль";
+                            text: root.form.uuid;
+                            edited(t) => { root.form.uuid = t; }
+                        }
+
+                        if root.form.protocol <= 2: SectionTitle { text: "ТРАНСПОРТ"; }
+                        if root.form.protocol <= 2: Choice {
+                            label: "Сеть (network)";
+                            model: ["tcp", "ws", "httpupgrade", "grpc", "xhttp"];
+                            current-index: root.form.network;
+                            selected(i) => { root.form.network = i; }
+                        }
+                        if root.form.protocol <= 2 && root.form.network != 0: Field {
+                            label: "Host";
+                            text: root.form.host;
+                            edited(t) => { root.form.host = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.network != 0: Field {
+                            label: root.form.network == 3 ? "serviceName" : "Path";
+                            text: root.form.path;
+                            edited(t) => { root.form.path = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.network >= 3: Hint {
+                            text: "gRPC и XHTTP пока не поддерживаются ядром — профиль сохранится, но подключиться не получится.";
+                            color: Theme.warn;
+                        }
+
+                        if root.form.protocol <= 2: SectionTitle { text: "БЕЗОПАСНОСТЬ"; }
+                        if root.form.protocol <= 2: Choice {
+                            label: "Security";
+                            model: ["none", "tls", "reality"];
+                            current-index: root.form.security;
+                            selected(i) => { root.form.security = i; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security != 0: Field {
+                            label: "SNI (serverName)";
+                            text: root.form.sni;
+                            edited(t) => { root.form.sni = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security != 0: Field {
+                            label: "Fingerprint";
+                            placeholder: "chrome";
+                            text: root.form.fingerprint;
+                            edited(t) => { root.form.fingerprint = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security != 0: Field {
+                            label: "ALPN";
+                            placeholder: "h2,http/1.1";
+                            text: root.form.alpn;
+                            edited(t) => { root.form.alpn = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security == 1: Toggle {
+                            text: "Разрешить небезопасный сертификат";
+                            hint: "allowInsecure — отключает проверку сертификата";
+                            checked: root.form.allow-insecure;
+                            toggled(v) => { root.form.allow-insecure = v; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security == 2: Field {
+                            label: "PublicKey (pbk)";
+                            text: root.form.public-key;
+                            edited(t) => { root.form.public-key = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security == 2: Field {
+                            label: "ShortId (sid)";
+                            text: root.form.short-id;
+                            edited(t) => { root.form.short-id = t; }
+                        }
+                        if root.form.protocol <= 2 && root.form.security == 2: Field {
+                            label: "SpiderX (spx)";
+                            text: root.form.spider-x;
+                            edited(t) => { root.form.spider-x = t; }
+                        }
+                        Rectangle { height: 24px; }
+                        AccentButton {
+                            text: "Сохранить";
+                            clicked => { root.form-save(); }
+                        }
+                        Rectangle { height: 24px; }
+                    }
+                }
+            }
+
+            // ═══════════════ ПОДПИСКИ ═══════════════
+            if root.page == "subs": VerticalLayout {
+                TopBar {
+                    title: "Подписки";
+                    back => { root.open-page("main"); }
+                    IconButton {
+                        icon: "refresh";
+                        enabled: !root.subs-busy;
+                        clicked => { root.subs-update(); }
+                    }
+                    IconButton {
+                        icon: "plus";
+                        clicked => {
+                            root.sub-id = "";
+                            root.sub-name = "";
+                            root.sub-url = "";
+                            root.sub-dialog = true;
+                        }
+                    }
+                }
+                if root.subs-busy: Rectangle {
+                    height: 36px;
+                    background: Theme.accent.with-alpha(0.15);
+                    Text { text: "Обновление подписок…"; color: Theme.text; }
+                }
+                if root.subs.length == 0: VerticalLayout {
+                    padding: 32px;
+                    alignment: center;
+                    vertical-stretch: 1;
+                    Hint {
+                        text: "Добавьте ссылку на подписку (https://…) — серверы из неё появятся отдельной вкладкой на главном экране.";
+                        horizontal-alignment: center;
+                    }
+                }
+                if root.subs.length > 0: ListView {
+                    vertical-stretch: 1;
+                    for s in root.subs: Rectangle {
+                        height: 104px;
+                        Card {
+                            x: 8px;
+                            y: 4px;
+                            width: parent.width - 16px;
+                            height: parent.height - 8px;
+                            TouchArea {
+                                clicked => { root.sub-edit(s.id); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 6px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    Text { text: s.name; color: Theme.text; font-size: 15px; font-weight: 600; overflow: elide; }
+                                    Text { text: s.url; color: Theme.text2; font-size: 12px; overflow: elide; }
+                                    Text { text: s.info; color: Theme.text2; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Switch {
+                                        checked: s.enabled;
+                                        toggled => { root.sub-toggle(s.id, self.checked); }
+                                    }
+                                }
+                                IconButton {
+                                    icon: "delete";
+                                    tint: Theme.text2;
+                                    clicked => {
+                                        root.confirm-text = "Удалить подписку «" + s.name + "» и её серверы?";
+                                        root.confirm-action = "delete-sub:" + s.id;
+                                        root.confirm-visible = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══════════════ МАРШРУТИЗАЦИЯ ═══════════════
+            if root.page == "routing": VerticalLayout {
+                TopBar {
+                    title: "Маршрутизация";
+                    back => { root.open-page("main"); }
+                    IconButton {
+                        icon: "plus";
+                        clicked => { root.rule-open(""); }
+                    }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                  VerticalLayout {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        Card {
+                            height: settings-col.preferred-height;
+                            settings-col := VerticalLayout {
+                                padding: 14px;
+                                spacing: 10px;
+                                SectionTitle { text: "ГОТОВЫЙ НАБОР ПРАВИЛ"; }
+                                Choice {
+                                    label: "Набор";
+                                    model: root.presets;
+                                    current-index: root.preset-index;
+                                    selected(i) => { root.preset-index = i; }
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    AccentButton {
+                                        text: "Применить набор";
+                                        clicked => {
+                                            root.confirm-text = "Заменить текущие правила набором «" + root.presets[root.preset-index] + "»?";
+                                            root.confirm-action = "apply-preset";
+                                            root.confirm-visible = true;
+                                        }
+                                    }
+                                }
+                                Choice {
+                                    label: "Стратегия доменов (domainStrategy)";
+                                    model: ["AsIs", "IPIfNonMatch", "IPOnDemand"];
+                                    current-index: root.strategy-index;
+                                    selected(i) => { root.strategy-index = i; root.routing-changed(); }
+                                }
+                                Choice {
+                                    label: "Если ни одно правило не подошло";
+                                    model: ["Через прокси", "Напрямую", "Блокировать"];
+                                    current-index: root.final-index;
+                                    selected(i) => { root.final-index = i; root.routing-changed(); }
+                                }
+                                Hint { text: root.geo-status; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    AccentButton {
+                                        text: root.geo-busy ? "Загрузка…" : "Скачать geoip/geosite";
+                                        enabled: !root.geo-busy;
+                                        clicked => { root.geo-download(); }
+                                    }
+                                }
+                            }
+                        }
+                        SectionTitle { text: "ПРАВИЛА (сверху вниз, срабатывает первое подходящее)"; }
+                    }
+                    for r[i] in root.rules: Rectangle {
+                        height: 76px;
+                        Card {
+                            x: 12px;
+                            y: 4px;
+                            width: parent.width - 24px;
+                            height: parent.height - 8px;
+                            opacity: r.enabled ? 1 : 0.55;
+                            TouchArea {
+                                clicked => { root.rule-open(r.id); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        OutboundBadge { outbound: r.outbound; }
+                                        Text {
+                                            text: r.name;
+                                            color: Theme.text;
+                                            font-size: 14px;
+                                            font-weight: 600;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Text { text: r.summary; color: Theme.text2; font-size: 12px; overflow: elide; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconButton {
+                                        icon: "up";
+                                        tint: Theme.text2;
+                                        width: 36px;
+                                        height: 36px;
+                                        enabled: i > 0;
+                                        clicked => { root.rule-move(r.id, -1); }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Switch {
+                                        checked: r.enabled;
+                                        toggled => { root.rule-toggle(r.id, self.checked); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { height: 24px; }
+                  }
+                }
+            }
+
+            // ═══════════════ РЕДАКТОР ПРАВИЛА ═══════════════
+            if root.page == "rule": VerticalLayout {
+                TopBar {
+                    title: root.rule-is-new ? "Новое правило" : "Правило";
+                    back => { root.open-page("routing"); }
+                    if !root.rule-is-new: IconButton {
+                        icon: "delete";
+                        clicked => {
+                            root.confirm-text = "Удалить правило?";
+                            root.confirm-action = "delete-rule:" + root.rule-form.id;
+                            root.confirm-visible = true;
+                        }
+                    }
+                    IconButton {
+                        icon: "check";
+                        clicked => { root.rule-save(); }
+                    }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+                        Field { label: "Название"; text: root.rule-form.name; edited(t) => { root.rule-form.name = t; } }
+                        Choice {
+                            label: "Действие";
+                            model: ["Через прокси", "Напрямую", "Блокировать"];
+                            current-index: root.rule-form.outbound;
+                            selected(i) => { root.rule-form.outbound = i; }
+                        }
+                        Toggle {
+                            text: "Правило включено";
+                            checked: root.rule-form.enabled;
+                            toggled(v) => { root.rule-form.enabled = v; }
+                        }
+                        Text { text: "Домены (по одному в строке)"; color: Theme.text2; font-size: 12px; }
+                        TextEdit {
+                            height: 150px;
+                            text: root.rule-form.domain;
+                            edited(t) => { root.rule-form.domain = t; }
+                        }
+                        Hint { text: "domain:example.com — домен и поддомены; full:a.com — точное совпадение; keyword:ads — подстрока; regexp:… — регулярное выражение; geosite:youtube — категория из geosite.dat."; }
+                        Text { text: "IP-адреса и подсети (по одному в строке)"; color: Theme.text2; font-size: 12px; }
+                        TextEdit {
+                            height: 110px;
+                            text: root.rule-form.ip;
+                            edited(t) => { root.rule-form.ip = t; }
+                        }
+                        Hint { text: "1.2.3.4, 10.0.0.0/8, 2001:db8::/32, geoip:ru, geoip:private, !geoip:ru — всё, кроме."; }
+                        Field { label: "Порты"; placeholder: "443 или 80,443 или 1000-2000"; text: root.rule-form.port; edited(t) => { root.rule-form.port = t; } }
+                        Choice {
+                            label: "Сеть";
+                            model: ["TCP и UDP", "только TCP", "только UDP"];
+                            current-index: root.rule-form.network;
+                            selected(i) => { root.rule-form.network = i; }
+                        }
+                        Field { label: "Протокол (по сниффингу)"; placeholder: "tls,http"; text: root.rule-form.protocol; edited(t) => { root.rule-form.protocol = t; } }
+                        Rectangle { height: 8px; }
+                        AccentButton { text: "Сохранить"; clicked => { root.rule-save(); } }
+                        Rectangle { height: 24px; }
+                    }
+                }
+            }
+
+            // ═══════════════ НАСТРОЙКИ ═══════════════
+            if root.page == "settings": VerticalLayout {
+                TopBar {
+                    title: "Настройки";
+                    back => { root.settings-save(); root.open-page("main"); }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 6px;
+                        SectionTitle { text: "DNS И ТРАФИК"; }
+                        Toggle {
+                            text: "FakeDNS";
+                            hint: "Домены резолвит сервер — защищает от подмены DNS и позволяет маршрутизировать по доменам";
+                            checked: root.settings.fake-dns;
+                            toggled(v) => { root.settings.fake-dns = v; }
+                        }
+                        Toggle {
+                            text: "Сниффинг (TLS SNI / HTTP Host)";
+                            hint: "Определять домен по содержимому соединения для правил маршрутизации";
+                            checked: root.settings.sniffing;
+                            toggled(v) => { root.settings.sniffing = v; }
+                        }
+                        Toggle {
+                            text: "IPv6 через VPN";
+                            hint: "Перехватывать IPv6-трафик, чтобы он не шёл мимо туннеля";
+                            checked: root.settings.ipv6;
+                            toggled(v) => { root.settings.ipv6 = v; }
+                        }
+                        Toggle {
+                            text: "Блокировать QUIC (UDP/443)";
+                            hint: "Браузеры перейдут на TCP — иногда это стабильнее";
+                            checked: root.settings.block-quic;
+                            toggled(v) => { root.settings.block-quic = v; }
+                        }
+                        Field { label: "DNS-сервер для прочих запросов"; text: root.settings.dns; edited(t) => { root.settings.dns = t; } }
+                        Field { label: "MTU"; input-type: InputType.number; text: root.settings.mtu; edited(t) => { root.settings.mtu = t; } }
+                        Rectangle { height: 8px; }
+                        SectionTitle { text: "ЛОКАЛЬНЫЙ ПРОКСИ"; }
+                        Toggle {
+                            text: "SOCKS5 на 127.0.0.1";
+                            hint: "Для приложений, умеющих работать через прокси";
+                            checked: root.settings.local-socks;
+                            toggled(v) => { root.settings.local-socks = v; }
+                        }
+                        Field { label: "Порт SOCKS5"; input-type: InputType.number; text: root.settings.socks-port; edited(t) => { root.settings.socks-port = t; } }
+                        Rectangle { height: 8px; }
+                        SectionTitle { text: "ПРОЧЕЕ"; }
+                        Toggle {
+                            text: "allowInsecure по умолчанию для новых TLS-профилей";
+                            checked: root.settings.allow-insecure;
+                            toggled(v) => { root.settings.allow-insecure = v; }
+                        }
+                        Field { label: "URL для теста задержки"; text: root.settings.test-url; edited(t) => { root.settings.test-url = t; } }
+                        Field { label: "User-Agent для подписок"; text: root.settings.ua; edited(t) => { root.settings.ua = t; } }
+                        Rectangle { height: 12px; }
+                        AccentButton { text: "Сохранить"; clicked => { root.settings-save(); } }
+                        Hint { text: "Изменения применятся при следующем подключении."; }
+                        Rectangle { height: 24px; }
+                    }
+                }
+            }
+
+            // ═══════════════ ПРИЛОЖЕНИЯ ═══════════════
+            if root.page == "apps": VerticalLayout {
+                TopBar {
+                    title: "Прокси для приложений";
+                    back => { root.open-page("main"); }
+                }
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    Choice {
+                        label: "Режим";
+                        model: ["Выключено — все приложения через VPN", "Только выбранные через VPN", "Выбранные в обход VPN"];
+                        current-index: root.apps-mode;
+                        selected(i) => { root.apps-mode = i; root.apps-mode-changed(i); }
+                    }
+                    if root.apps-mode != 0: HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "Поиск приложения";
+                            text: root.apps-filter;
+                            edited(t) => { root.apps-filter = t; root.apps-filter-changed(t); }
+                        }
+                        FlatButton { text: "Все"; clicked => { root.apps-select-all(true); } }
+                        FlatButton { text: "Сброс"; tint: Theme.text2; clicked => { root.apps-select-all(false); } }
+                    }
+                }
+                if root.apps-mode != 0 && root.apps-loading: HorizontalLayout {
+                    alignment: center;
+                    padding: 24px;
+                    Spinner { width: 36px; height: 36px; indeterminate: true; }
+                }
+                if root.apps-mode != 0 && !root.apps-loading: ListView {
+                    vertical-stretch: 1;
+                    for a in root.apps: Rectangle {
+                        height: 58px;
+                        background: ata.pressed ? Theme.card-pressed : Theme.card;
+                        ata := TouchArea {
+                            clicked => { root.app-toggle(a.pkg, !a.checked); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text { text: a.label; color: Theme.text; font-size: 15px; overflow: elide; }
+                                Text { text: a.pkg; color: Theme.text2; font-size: 11px; overflow: elide; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                CheckBox {
+                                    checked: a.checked;
+                                    toggled => { root.app-toggle(a.pkg, self.checked); }
+                                }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.divider; }
+                    }
+                }
+                if root.apps-mode == 0: VerticalLayout {
+                    padding: 24px;
+                    vertical-stretch: 1;
+                    Hint { text: "Весь трафик устройства идёт через VPN (кроме самого XrayDroid). Выберите режим, чтобы указать отдельные приложения."; }
+                }
+            }
+
+            // ═══════════════ ЖУРНАЛ ═══════════════
+            if root.page == "logs": VerticalLayout {
+                TopBar {
+                    title: "Журнал";
+                    back => { root.open-page("main"); }
+                    IconButton { icon: "copy"; clicked => { root.logs-copy(); } }
+                    IconButton { icon: "refresh"; clicked => { root.logs-refresh(); } }
+                    IconButton { icon: "delete"; clicked => { root.logs-clear(); } }
+                }
+                ListView {
+                    vertical-stretch: 1;
+                    for l in root.logs: Text {
+                        text: l;
+                        color: Theme.text;
+                        font-size: 11px;
+                        font-family: "monospace";
+                        wrap: word-wrap;
+                        x: 8px;
+                        width: parent.width - 16px;
+                    }
+                }
+            }
+
+            // ═══════════════ О ПРОГРАММЕ ═══════════════
+            if root.page == "about": VerticalLayout {
+                TopBar {
+                    title: "О программе";
+                    back => { root.open-page("main"); }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 84px;
+                                height: 84px;
+                                border-radius: 42px;
+                                background: Theme.accent;
+                                Logo { width: 40px; height: 40px; }
+                            }
+                        }
+                        Text {
+                            text: "XrayDroid " + root.version;
+                            color: Theme.text;
+                            font-size: 20px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+                        Hint {
+                            text: "VPN-клиент для Android в стиле v2rayN/v2rayNG. Ядро и интерфейс написаны на Rust.";
+                            horizontal-alignment: center;
+                        }
+                        Card {
+                            height: about-col.preferred-height;
+                            about-col := VerticalLayout {
+                                padding: 14px;
+                                spacing: 6px;
+                                SectionTitle { text: "ПОДДЕРЖИВАЕТСЯ"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (+ XTLS Vision), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), SOCKS5"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• TCP, TLS, REALITY, WebSocket, HTTPUpgrade"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• Маршрутизация: домены, IP, geosite/geoip, порты, протоколы"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• Подписки, тест задержки, FakeDNS, раздельное туннелирование"; }
+                            }
+                        }
+                        Hint { text: "Лицензия GPL-3.0."; horizontal-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── выпадающие меню ──
+    add-menu := PopupWindow {
+        x: root.width - 270px;
+        y: root.safe-area-insets.top + 8px;
+        width: 260px;
+        Card {
+            border-radius: 6px;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                MenuItem { text: "Импорт из буфера обмена"; icon: "copy"; clicked => { root.import-clipboard(); } }
+                MenuItem { text: "Вставить ссылки вручную"; icon: "edit"; clicked => { root.paste-text = ""; root.paste-visible = true; } }
+                MenuItem {
+                    text: "Добавить подписку";
+                    icon: "sub";
+                    clicked => {
+                        root.sub-id = "";
+                        root.sub-name = "";
+                        root.sub-url = "";
+                        root.sub-dialog = true;
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.divider; }
+                MenuItem { text: "Новый VLESS"; clicked => { root.add-manual(0); } }
+                MenuItem { text: "Новый VMess"; clicked => { root.add-manual(1); } }
+                MenuItem { text: "Новый Trojan"; clicked => { root.add-manual(2); } }
+                MenuItem { text: "Новый Shadowsocks"; clicked => { root.add-manual(3); } }
+                MenuItem { text: "Новый SOCKS"; clicked => { root.add-manual(4); } }
+            }
+        }
+    }
+
+    more-menu := PopupWindow {
+        x: root.width - 290px;
+        y: root.safe-area-insets.top + 8px;
+        width: 280px;
+        Card {
+            border-radius: 6px;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                MenuItem { text: "Проверить задержку всех"; icon: "speed"; clicked => { root.menu-action("test-all"); } }
+                MenuItem { text: "Сортировать по задержке"; icon: "sort"; clicked => { root.menu-action("sort"); } }
+                MenuItem { text: "Обновить подписки"; icon: "refresh"; clicked => { root.menu-action("update-subs"); } }
+                MenuItem { text: "Экспорт группы в буфер"; icon: "share"; clicked => { root.menu-action("export"); } }
+                MenuItem { text: "Удалить дубликаты"; icon: "delete"; clicked => { root.menu-action("dedup"); } }
+                MenuItem { text: "Удалить недоступные"; icon: "delete"; clicked => { root.menu-action("remove-bad"); } }
+                MenuItem {
+                    text: "Удалить все в группе";
+                    icon: "delete";
+                    clicked => {
+                        root.confirm-text = "Удалить все серверы в этой группе?";
+                        root.confirm-action = "delete-group";
+                        root.confirm-visible = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // ── боковое меню ──
+    if root.drawer-open: Rectangle {
+        background: #00000070;
+        TouchArea {
+            clicked => { root.drawer-open = false; }
+        }
+    }
+    Rectangle {
+        x: root.drawer-open ? 0 : -self.width - 10px;
+        width: min(300px, root.width * 0.82);
+        height: root.height;
+        background: Theme.card;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000060;
+        animate x { duration: 220ms; easing: ease-out; }
+        TouchArea { }
+        VerticalLayout {
+            Rectangle {
+                height: 150px + root.safe-area-insets.top;
+                background: Theme.primary;
+                VerticalLayout {
+                    padding: 20px;
+                    padding-top: 20px + root.safe-area-insets.top;
+                    alignment: end;
+                    spacing: 6px;
+                    Rectangle {
+                        width: 52px;
+                        height: 52px;
+                        border-radius: 26px;
+                        background: Theme.accent;
+                        Logo { }
+                    }
+                    Text { text: "XrayDroid"; color: white; font-size: 18px; font-weight: 700; }
+                    Text { text: root.running ? "Подключено" : "Не подключено"; color: #ffffffb0; font-size: 13px; }
+                }
+            }
+            VerticalLayout {
+                padding-top: 8px;
+                MenuItem { text: "Подписки"; icon: "sub"; clicked => { root.drawer-open = false; root.open-page("subs"); } }
+                MenuItem { text: "Маршрутизация"; icon: "route"; clicked => { root.drawer-open = false; root.open-page("routing"); } }
+                MenuItem { text: "Прокси для приложений"; icon: "apps"; clicked => { root.drawer-open = false; root.open-page("apps"); } }
+                MenuItem { text: "Настройки"; icon: "settings"; clicked => { root.drawer-open = false; root.open-page("settings"); } }
+                Rectangle { height: 1px; background: Theme.divider; }
+                MenuItem { text: "Журнал"; icon: "log"; clicked => { root.drawer-open = false; root.open-page("logs"); } }
+                MenuItem { text: "О программе"; icon: "info"; clicked => { root.drawer-open = false; root.open-page("about"); } }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+
+    // ── диалог подтверждения ──
+    if root.confirm-visible: DialogFrame {
+        title: root.confirm-text;
+        dismiss => { root.confirm-visible = false; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            FlatButton { text: "Отмена"; tint: Theme.text2; clicked => { root.confirm-visible = false; } }
+            FlatButton {
+                text: "OK";
+                clicked => {
+                    root.confirm-visible = false;
+                    root.confirm-ok(root.confirm-action);
+                }
+            }
+        }
+    }
+
+    // ── вставка ссылок вручную ──
+    if root.paste-visible: DialogFrame {
+        title: "Вставьте ссылки";
+        dismiss => { root.paste-visible = false; }
+        TextEdit {
+            height: 160px;
+            text: root.paste-text;
+            edited(t) => { root.paste-text = t; }
+        }
+        Hint { text: "Одна или несколько ссылок vless:// vmess:// trojan:// ss:// socks:// или содержимое подписки в base64."; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            FlatButton { text: "Отмена"; tint: Theme.text2; clicked => { root.paste-visible = false; } }
+            FlatButton {
+                text: "Импорт";
+                clicked => {
+                    root.paste-visible = false;
+                    root.import-text(root.paste-text);
+                }
+            }
+        }
+    }
+
+    // ── диалог подписки ──
+    if root.sub-dialog: DialogFrame {
+        title: root.sub-id == "" ? "Новая подписка" : "Подписка";
+        dismiss => { root.sub-dialog = false; }
+        Field { label: "Название"; text: root.sub-name; edited(t) => { root.sub-name = t; } }
+        Field { label: "URL"; placeholder: "https://…"; text: root.sub-url; edited(t) => { root.sub-url = t; } }
+        Hint { text: "Название можно не указывать — оно подтянется из подписки. Серверы появятся отдельной вкладкой на главном экране."; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            FlatButton { text: "Отмена"; tint: Theme.text2; clicked => { root.sub-dialog = false; } }
+            FlatButton {
+                text: "Сохранить";
+                clicked => {
+                    root.sub-dialog = false;
+                    root.sub-save();
+                }
+            }
+        }
+    }
+
+    // ── всплывающее уведомление ──
+    Rectangle {
+        x: 24px;
+        width: root.width - 48px;
+        y: root.height - max(root.safe-area-insets.bottom, root.kb) - 140px;
+        height: toast-t.preferred-height + 24px;
+        border-radius: 8px;
+        background: #323232f0;
+        opacity: root.toast-visible ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: 200ms; }
+        toast-t := Text {
+            x: 14px;
+            width: parent.width - 28px;
+            text: root.toast-text;
+            color: white;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+    }
+}
