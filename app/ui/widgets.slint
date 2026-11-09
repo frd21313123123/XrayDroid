@@ -1,29 +1,36 @@
-// Тема, иконки и базовые виджеты. Минималистичный стиль: светлая и тёмная тема,
-// один зелёный акцент, крупные скругления, моноширинные цифры.
+// Тема, иконки и базовые виджеты. Почти чёрный (или светлый) фон, один лаймовый акцент,
+// плоские списки, шрифты Onest и JetBrains Mono (цифры, адреса, условия правил).
 
 import { Palette } from "std-widgets.slint";
+import "fonts/Onest-Regular.ttf";
+import "fonts/Onest-Medium.ttf";
+import "fonts/Onest-SemiBold.ttf";
+import "fonts/JetBrainsMono-Regular.ttf";
+import "fonts/JetBrainsMono-Medium.ttf";
 
 export global Theme {
     in-out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
 
-    out property <color> bg: dark ? #121311 : #f5f5f2;
-    out property <color> surface: dark ? #1c1d1b : #ffffff;
-    out property <color> field: dark ? #121311 : #f5f5f2;
-    out property <color> ink: dark ? #ecece8 : #121212;
-    out property <color> on-ink: dark ? #121212 : #ffffff;
-    out property <color> ink2: dark ? #9d9d96 : #63635e;
-    out property <color> ink3: dark ? #6f6f69 : #8a8a84;
-    out property <color> line: dark ? #34352f : #e2e2dc;
-    out property <color> hair: dark ? #2a2b27 : #f0f0eb;
-    out property <color> ring: dark ? #55564f : #cfcfc8;
-    out property <color> track-off: dark ? #44453f : #d6d6d0;
-    out property <color> bar-bg: dark ? #2d2e2a : #ededE8;
-    out property <color> accent: dark ? #3dbe74 : #0f7a3d;
-    out property <color> accent-soft: accent.with-alpha(0.10);
-    out property <color> warn: dark ? #e0a040 : #a15c00;
-    out property <color> bad: dark ? #f0766b : #b42318;
-    out property <color> blue: dark ? #7aa2ff : #1d4ed8;
-    out property <color> scrim: #00000066;
+    out property <string> mono: "JetBrains Mono";
+
+    out property <color> bg: dark ? #0c0d0f : #f4f5f1;
+    out property <color> surface: dark ? #15171a : #ffffff;
+    // плашки поверх карточек: счётчики, значки приложений
+    out property <color> surface2: dark ? #1d2024 : #ecede8;
+    out property <color> ink: dark ? #f2f3f0 : #101214;
+    out property <color> on-ink: dark ? #0c0d0f : #f4f5f1;
+    out property <color> ink2: dark ? #9499a1 : #5c6168;
+    out property <color> ink3: dark ? #5d626a : #8a8f96;
+    out property <color> line: dark ? #272b30 : #d5d8d0;
+    out property <color> hair: dark ? #1d2024 : #e4e6df;
+    out property <color> ring: dark ? #3a3f46 : #b4b8af;
+    out property <color> knob-off: dark ? #9499a1 : #ffffff;
+    out property <color> accent: dark ? #c2f24b : #447a00;
+    out property <color> on-accent: dark ? #10140a : #ffffff;
+    out property <color> warn: dark ? #f0b45a : #8a5200;
+    out property <color> bad: dark ? #ff7a6b : #b42318;
+    out property <color> scrim: dark ? #050607b8 : #10121466;
+    out property <color> toast: dark ? #272b30 : #101214;
 }
 
 // ───────────── иконки (контуры 24×24, штрих 1.75) ─────────────
@@ -42,30 +49,25 @@ export component Icon inherits Path {
     stroke-line-join: round;
     fill: transparent;
     commands: name == "logo" ? "M 4 4 L 20 20 M 20 4 L 4 20"
-        : name == "gauge" ? "M 4 16 A 8 8 0 1 1 20 16 M 12 16 L 16 10"
+        : name == "gauge" ? "M 4 16 A 8 8 0 0 1 20 16 M 12 16 L 15.5 10"
         : name == "plus" ? "M 12 5 L 12 19 M 5 12 L 19 12"
         : name == "power" ? "M 12 3 L 12 11 M 6.3 6.8 A 8 8 0 1 0 17.7 6.8"
-        : name == "globe" ? "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 3 12 L 21 12 M 12 3 C 15 6.2 15 17.8 12 21 M 12 3 C 9 6.2 9 17.8 12 21"
-        : name == "route" ? "M 8 5 A 2 2 0 1 0 4 5 A 2 2 0 1 0 8 5 M 20 19 A 2 2 0 1 0 16 19 A 2 2 0 1 0 20 19 M 6 7 L 6 12 A 4 4 0 0 0 10 16 L 16 16"
-        : name == "layers" ? "M 4 7 L 12 3 L 20 7 L 12 11 Z M 4 12 L 12 16 L 20 12 M 4 17 L 12 21 L 20 17"
-        : name == "sliders" ? "M 4 7 L 13 7 M 17 7 L 20 7 M 4 17 L 7 17 M 11 17 L 20 17 M 17 7 A 2 2 0 1 0 13 7 A 2 2 0 1 0 17 7 M 11 17 A 2 2 0 1 0 7 17 A 2 2 0 1 0 11 17"
-        : name == "updown" ? "M 8 10 L 12 6 L 16 10 M 8 14 L 12 18 L 16 14"
+        : name == "globe" ? "M 12 3 A 9 9 0 1 0 12 21 A 9 9 0 1 0 12 3 M 3 12 L 21 12 M 12 3 C 8.5 7 8.5 17 12 21 M 12 3 C 15.5 7 15.5 17 12 21"
+        : name == "route" ? "M 6 19 L 6 13 C 6 10 8 9 11 9 L 18 9 M 15 5.5 L 18.5 9 L 15 12.5 M 6 5 L 6 5.01"
+        : name == "layers" ? "M 12 4 L 21 8.5 L 12 13 L 3 8.5 Z M 3 13 L 12 17.5 L 21 13"
+        : name == "sliders" ? "M 4 7 L 12 7 M 18 7 L 20 7 M 4 17 L 6 17 M 12 17 L 20 17 M 15 4.5 A 2.5 2.5 0 1 0 15 9.5 A 2.5 2.5 0 1 0 15 4.5 M 9 14.5 A 2.5 2.5 0 1 0 9 19.5 A 2.5 2.5 0 1 0 9 14.5"
         : name == "chevron" ? "M 9 6 L 15 12 L 9 18"
         : name == "arrow" ? "M 5 12 L 19 12 M 13 6 L 19 12 L 13 18"
         : name == "back" ? "M 19 12 L 5 12 M 11 6 L 5 12 L 11 18"
-        : name == "refresh" ? "M 19 12 A 7 7 0 1 1 16.5 6.6 M 17 3 L 17 7 L 13 7"
-        : name == "edit" ? "M 4 20 L 4 16 L 15 5 L 19 9 L 8 20 Z"
-        : name == "search" ? "M 17 10.5 A 6.5 6.5 0 1 0 4 10.5 A 6.5 6.5 0 1 0 17 10.5 M 15.5 15.5 L 20 20"
-        : name == "check" ? "M 5 12.5 L 9.5 17 L 19 7.5"
-        : name == "delete" ? "M 5 7 L 19 7 M 10 7 L 10 4.5 L 14 4.5 L 14 7 M 7 7 L 8 20 L 16 20 L 17 7 M 10.5 10.5 L 10.5 16.5 M 13.5 10.5 L 13.5 16.5"
-        : name == "share" ? "M 17.5 5.5 L 6.5 12 L 17.5 18.5 M 19.5 5.5 A 2 2 0 1 0 15.5 5.5 A 2 2 0 1 0 19.5 5.5 M 8.5 12 A 2 2 0 1 0 4.5 12 A 2 2 0 1 0 8.5 12 M 19.5 18.5 A 2 2 0 1 0 15.5 18.5 A 2 2 0 1 0 19.5 18.5"
+        : name == "refresh" ? "M 20 12 A 8 8 0 1 1 17.5 6.2 M 20 4 L 20 8 L 16 8"
+        : name == "edit" ? "M 4 20 L 8 20 L 19 9 L 15 5 L 4 16 Z M 13 7 L 17 11"
+        : name == "search" ? "M 11 4 A 7 7 0 1 0 11 18 A 7 7 0 1 0 11 4 M 16 16 L 20 20"
+        : name == "check" ? "M 5 12.5 L 10 17 L 19 7"
+        : name == "delete" ? "M 5 7 L 19 7 M 10 7 L 10 4 L 14 4 L 14 7 M 7 7 L 8 20 L 16 20 L 17 7"
+        : name == "share" ? "M 12 15 L 12 4 M 8 8 L 12 4 L 16 8 M 5 13 L 5 19 L 19 19 L 19 13"
         : name == "copy" ? "M 8 8 L 20 8 L 20 20 L 8 20 Z M 16 8 L 16 4 L 4 4 L 4 16 L 8 16"
         : name == "paste" ? "M 9 4 L 15 4 L 15 7 L 9 7 Z M 7 5.5 L 5 5.5 L 5 20 L 19 20 L 19 5.5 L 17 5.5 M 9 12 L 15 12 M 9 16 L 13 16"
-        : name == "download" ? "M 12 4 L 12 15 M 7 10 L 12 15 L 17 10 M 5 20 L 19 20"
         : name == "sort" ? "M 4 6 L 20 6 M 4 12 L 14 12 M 4 18 L 9 18"
-        : name == "log" ? "M 6 3 L 15 3 L 19 7 L 19 21 L 6 21 Z M 9 11 L 16 11 M 9 14 L 16 14 M 9 17 L 13 17"
-        : name == "info" ? "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 12 11 L 12 17 M 12 7.5 L 12 8"
-        : name == "close" ? "M 6 6 L 18 18 M 18 6 L 6 18"
         : name == "up" ? "M 12 19 L 12 5 M 6 11 L 12 5 L 18 11"
         : name == "down" ? "M 12 5 L 12 19 M 6 13 L 12 19 L 18 13"
         : "";
@@ -73,22 +75,27 @@ export component Icon inherits Path {
 
 // ───────────── базовые элементы ─────────────
 
-// Круглая кнопка в шапке: прозрачная или залитая (primary).
+// Моноширинный текст: цифры, адреса, условия правил.
+export component Mono inherits Text {
+    font-family: Theme.mono;
+}
+
+// Кнопка-иконка 44×44 без фона.
 export component RoundButton inherits Rectangle {
     in property <string> icon;
-    in property <bool> primary: false;
+    in property <color> tint: Theme.ink;
+    in property <length> icon-size: 22px;
     in property <bool> enabled: true;
     callback clicked();
     width: 44px;
     height: 44px;
     border-radius: 22px;
-    background: primary ? (ta.pressed ? Theme.ink.with-alpha(0.8) : Theme.ink) : (ta.pressed ? Theme.ink.with-alpha(0.08) : transparent);
+    background: ta.pressed ? Theme.ink.with-alpha(0.08) : transparent;
     opacity: enabled ? 1 : 0.4;
     Icon {
         name: root.icon;
-        size: root.primary ? 20px : 22px;
-        color: root.primary ? Theme.on-ink : Theme.ink;
-        stroke-width: root.primary ? 2px : 1.75px;
+        size: root.icon-size;
+        color: root.tint;
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -96,28 +103,25 @@ export component RoundButton inherits Rectangle {
     }
 }
 
-// Заголовок крупного экрана-вкладки.
+// Заголовок экрана-вкладки: крупное название, действие справа.
 export component PageHeader inherits Rectangle {
     in property <string> title;
-    height: 64px;
+    height: 76px;
     HorizontalLayout {
-        padding-left: 20px;
-        padding-right: 12px;
-        padding-top: 8px;
-        spacing: 4px;
+        padding-left: 24px;
+        padding-right: 20px;
+        padding-top: 24px;
+        padding-bottom: 8px;
         Text {
             text: root.title;
             color: Theme.ink;
-            font-size: 24px;
-            font-weight: 700;
-            letter-spacing: -0.7px;
+            font-size: 28px;
+            font-weight: 600;
+            letter-spacing: -0.56px;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
-        VerticalLayout {
-            alignment: center;
-            HorizontalLayout { @children }
-        }
+        HorizontalLayout { @children }
     }
 }
 
@@ -128,55 +132,49 @@ export component SubHeader inherits Rectangle {
     callback back();
     height: 64px;
     HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 12px;
-        padding-top: 8px;
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 16px;
+        padding-bottom: 4px;
         spacing: 4px;
-        VerticalLayout {
-            alignment: center;
-            RoundButton { icon: "back"; clicked => { root.back(); } }
-        }
+        RoundButton { icon: "back"; clicked => { root.back(); } }
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
             Text {
                 text: root.title;
                 color: Theme.ink;
-                font-size: 20px;
-                font-weight: 700;
-                letter-spacing: -0.4px;
+                font-size: 17px;
+                font-weight: 600;
+                letter-spacing: -0.17px;
                 overflow: elide;
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
                 color: Theme.ink2;
                 font-size: 12px;
-                font-family: "monospace";
                 overflow: elide;
             }
         }
-        VerticalLayout {
-            alignment: center;
-            HorizontalLayout { spacing: 4px; @children }
-        }
+        HorizontalLayout { spacing: 4px; @children }
     }
 }
 
 export component Card inherits Rectangle {
     background: Theme.surface;
-    border-radius: 20px;
+    border-radius: 16px;
 }
 
 export component Divider inherits Rectangle {
     height: 1px;
-    background: Theme.hair;
+    background: Theme.line;
 }
 
 export component SectionLabel inherits Text {
     color: Theme.ink2;
     font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
+    font-weight: 500;
+    letter-spacing: 0.96px;
 }
 
 export component Hint inherits Text {
@@ -187,33 +185,30 @@ export component Hint inherits Text {
 
 export component Chevron inherits Icon {
     name: "chevron";
-    size: 18px;
-    color: Theme.ink3;
+    size: 16px;
+    color: Theme.ink2;
     stroke-width: 2px;
 }
 
-// Переключатель 40×24.
+// Переключатель 40×24 в зоне нажатия 56×44.
 export component Toggle inherits Rectangle {
     in-out property <bool> checked;
     callback toggled(bool);
-    width: 52px;
+    width: 56px;
     height: 44px;
     Rectangle {
         width: 40px;
         height: 24px;
         border-radius: 12px;
-        background: root.checked ? Theme.accent : Theme.track-off;
+        background: root.checked ? Theme.accent : Theme.line;
         animate background { duration: 150ms; }
         Rectangle {
-            x: root.checked ? 18px : 2px;
-            y: 2px;
-            width: 20px;
-            height: 20px;
-            border-radius: 10px;
-            background: white;
-            drop-shadow-blur: 2px;
-            drop-shadow-offset-y: 1px;
-            drop-shadow-color: #00000033;
+            x: root.checked ? 19px : 3px;
+            y: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: root.checked ? Theme.on-accent : Theme.knob-off;
             animate x { duration: 150ms; easing: ease-out; }
         }
     }
@@ -228,13 +223,11 @@ export component Toggle inherits Rectangle {
 // Радиокнопка: выбранная — толстое кольцо.
 export component Radio inherits Rectangle {
     in property <bool> on;
-    in property <color> tint: Theme.accent;
     width: 20px;
     height: 20px;
     border-radius: 10px;
     border-width: root.on ? 6px : 1.5px;
-    border-color: root.on ? root.tint : Theme.ring;
-    background: Theme.surface;
+    border-color: root.on ? Theme.accent : Theme.ring;
 }
 
 // Флажок 22×22 со скруглением 7.
@@ -249,27 +242,42 @@ export component Check inherits Rectangle {
     if root.on: Icon {
         name: "check";
         size: 14px;
-        color: white;
+        color: Theme.on-accent;
         stroke-width: 3px;
     }
 }
 
-// Плитка приложения: цветная с буквой.
+// Плитка приложения: нейтральная, с первой буквой названия.
 export component AppTile inherits Rectangle {
     in property <string> letter;
-    in property <color> tint;
-    in property <length> size: 32px;
-    width: size;
-    height: size;
-    border-radius: size * 0.28;
-    background: tint;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    background: Theme.surface2;
     Text {
         text: root.letter;
-        color: white;
-        font-size: root.size * 0.44;
-        font-weight: 700;
+        color: Theme.ink;
+        font-size: 13px;
+        font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+}
+
+// Плашка со значением: задержка, число серверов.
+export component Badge inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Theme.ink2;
+    in property <length> font-size: 12px;
+    in property <length> pad-y: 4px;
+    height: t.preferred-height + 2 * pad-y;
+    width: t.preferred-width + 20px;
+    border-radius: 10px;
+    background: Theme.surface2;
+    t := Mono {
+        text: root.text;
+        color: root.ink;
+        font-size: root.font-size;
     }
 }
 
@@ -278,16 +286,16 @@ export component FilterChip inherits Rectangle {
     in property <string> text;
     in property <bool> active;
     callback clicked();
-    height: 36px;
-    min-width: label.preferred-width + 28px;
-    border-radius: 18px;
+    height: 44px;
+    min-width: label.preferred-width + 32px;
+    border-radius: 22px;
     background: active ? Theme.ink : transparent;
     border-width: active ? 0px : 1px;
     border-color: Theme.line;
     label := Text {
         text: root.text;
-        color: root.active ? Theme.on-ink : Theme.ink;
-        font-size: 13px;
+        color: root.active ? Theme.on-ink : Theme.ink2;
+        font-size: 14px;
         font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -295,37 +303,31 @@ export component FilterChip inherits Rectangle {
     TouchArea { clicked => { root.clicked(); } }
 }
 
-// Метка действия правила.
-export component Tag inherits Rectangle {
-    in property <string> text;
-    in property <color> tint;
-    height: 22px;
-    width: t.preferred-width + 16px;
-    border-radius: 6px;
-    background: tint.with-alpha(0.10);
-    t := Text {
-        text: root.text;
-        color: root.tint;
-        font-size: 11px;
-        font-weight: 600;
-    }
-}
-
-// Основная кнопка.
+// Основная кнопка: во всю ширину, заливка акцентом.
 export component PrimaryButton inherits Rectangle {
     in property <string> text;
+    in property <string> icon;
     in property <bool> enabled: true;
-    in property <length> button-height: 40px;
     callback clicked();
-    height: button-height;
-    min-width: t.preferred-width + 32px;
-    border-radius: button-height / 2;
-    background: !enabled ? Theme.track-off : ta.pressed ? Theme.ink.with-alpha(0.8) : Theme.ink;
-    t := Text {
-        text: root.text;
-        color: Theme.on-ink;
-        font-size: 14px;
-        font-weight: 600;
+    height: 56px;
+    min-width: lay.preferred-width + 48px;
+    border-radius: 16px;
+    background: !enabled ? Theme.surface2 : Theme.accent;
+    opacity: ta.pressed ? 0.85 : 1;
+    lay := HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        if root.icon != "": VerticalLayout {
+            alignment: center;
+            Icon { name: root.icon; size: 18px; stroke-width: 2px; color: root.enabled ? Theme.on-accent : Theme.ink2; }
+        }
+        Text {
+            text: root.text;
+            color: root.enabled ? Theme.on-accent : Theme.ink2;
+            font-size: 15px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -333,20 +335,61 @@ export component PrimaryButton inherits Rectangle {
     }
 }
 
-// Текстовая кнопка (диалоги, «удалить»).
+// Второстепенная кнопка: контур.
+export component OutlineButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 56px;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
+    Text {
+        text: root.text;
+        color: Theme.ink;
+        font-size: 15px;
+        font-weight: 500;
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Текстовая кнопка (диалоги, «Скачать»).
 export component TextButton inherits Rectangle {
     in property <string> text;
     in property <color> tint: Theme.ink;
+    in property <bool> enabled: true;
     callback clicked();
     height: 44px;
     min-width: t.preferred-width + 24px;
     border-radius: 12px;
     background: ta.pressed ? tint.with-alpha(0.08) : transparent;
+    opacity: enabled ? 1 : 0.5;
     t := Text {
         text: root.text;
         color: root.tint;
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 500;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Строка-ссылка с плюсом: «Новый маршрут», «Новое правило».
+export component AddLink inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    height: 48px;
+    border-radius: 12px;
+    background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout { alignment: center; Icon { name: "plus"; size: 18px; stroke-width: 2px; color: Theme.accent; } }
+        Text { text: root.text; color: Theme.accent; font-size: 14px; font-weight: 500; vertical-alignment: center; }
     }
     ta := TouchArea { clicked => { root.clicked(); } }
 }
@@ -358,9 +401,35 @@ export component Tappable inherits Rectangle {
     ta := TouchArea { clicked => { root.clicked(); } }
 }
 
+// Выбор одного из вариантов в одну строку.
+export component Segmented inherits Rectangle {
+    in property <[string]> model;
+    in property <int> current;
+    callback selected(int);
+    height: 52px;
+    border-radius: 14px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding: 4px;
+        spacing: 4px;
+        for label[i] in root.model: Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 10px;
+            background: i == root.current ? Theme.ink : transparent;
+            Text {
+                text: label;
+                color: i == root.current ? Theme.on-ink : Theme.ink2;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            TouchArea { clicked => { root.selected(i); } }
+        }
+    }
+}
+
 // ───────────── поля ввода ─────────────
 
-// Однострочное поле на плоском фоне; подпись — над полем.
+// Однострочное поле в контуре; подпись — над полем.
 export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
@@ -369,14 +438,12 @@ export component Field inherits VerticalLayout {
     in property <bool> mono: false;
     callback edited(string);
     spacing: 8px;
-    if root.label != "": SectionLabel {
-        text: root.label;
-        x: 8px;
-    }
+    if root.label != "": SectionLabel { text: root.label; }
     Rectangle {
         height: 52px;
-        border-radius: 16px;
-        background: Theme.surface;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.ring : Theme.line;
         input := TextInput {
             x: 16px;
             width: parent.width - 32px;
@@ -385,9 +452,9 @@ export component Field inherits VerticalLayout {
             text: root.text;
             input-type: root.input-type;
             color: Theme.ink;
-            font-size: root.mono ? 14px : 15px;
+            font-size: root.mono ? 14px : 16px;
             font-weight: root.mono ? 400 : 500;
-            font-family: root.mono ? "monospace" : "";
+            font-family: root.mono ? Theme.mono : "";
             single-line: true;
             selection-background-color: Theme.accent.with-alpha(0.3);
             selection-foreground-color: Theme.ink;
@@ -416,16 +483,14 @@ export component Area inherits VerticalLayout {
     in property <length> area-height: 120px;
     callback edited(string);
     spacing: 8px;
-    if root.label != "": SectionLabel {
-        text: root.label;
-        x: 8px;
-    }
+    if root.label != "": SectionLabel { text: root.label; }
     Rectangle {
         height: root.area-height;
-        border-radius: 16px;
-        background: Theme.surface;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.ring : Theme.line;
         clip: true;
-        TextInput {
+        input := TextInput {
             x: 16px;
             y: 14px;
             width: parent.width - 32px;
@@ -433,7 +498,7 @@ export component Area inherits VerticalLayout {
             text: root.text;
             color: Theme.ink;
             font-size: 13px;
-            font-family: "monospace";
+            font-family: Theme.mono;
             single-line: false;
             wrap: word-wrap;
             selection-background-color: Theme.accent.with-alpha(0.3);
@@ -446,23 +511,24 @@ export component Area inherits VerticalLayout {
     }
 }
 
-// Строка-переключатель в карточке: название, пояснение, тумблер.
+// Строка-переключатель: название, пояснение, тумблер.
 export component ToggleRow inherits Rectangle {
     in property <string> text;
     in property <string> hint;
+    in property <bool> mono-hint: false;
+    in property <length> inset: 16px;
     in-out property <bool> checked;
     callback toggled(bool);
     height: max(56px, lay.preferred-height);
     lay := HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 6px;
-        padding-top: 5px;
-        padding-bottom: 5px;
+        padding-left: root.inset;
+        padding-top: 6px;
+        padding-bottom: 6px;
         spacing: 12px;
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
-            spacing: 2px;
+            spacing: 4px;
             Text {
                 text: root.text;
                 color: Theme.ink;
@@ -470,7 +536,10 @@ export component ToggleRow inherits Rectangle {
                 font-weight: 500;
                 wrap: word-wrap;
             }
-            if root.hint != "": Hint { text: root.hint; }
+            if root.hint != "": Hint {
+                text: root.hint;
+                font-family: root.mono-hint ? Theme.mono : "";
+            }
         }
         VerticalLayout {
             alignment: center;
@@ -495,35 +564,37 @@ export global Picker {
     in-out property <int> result;
 }
 
-// Строка «подпись + текущее значение + ⇅»; открывает лист выбора.
+// Строка «подпись + текущее значение + ›»; открывает лист выбора.
 export component ChoiceRow inherits Rectangle {
     in property <string> label;
     in property <[string]> model;
     in property <int> current-index;
     in property <bool> mono-value: false;
-    // true — подпись слева, значение справа (как «Стратегия DNS»)
+    // true — подпись слева, значение справа (как «Если ничего не подошло»)
     in property <bool> inline: false;
     callback selected(int);
     property <int> serial: Picker.serial;
+    property <string> value: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
     changed serial => {
         if (Picker.owner == root.label) {
             root.selected(Picker.result);
         }
     }
-    height: max(inline ? 52px : 56px, lay.preferred-height);
+    height: max(inline ? 56px : 60px, lay.preferred-height);
+    background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
     lay := HorizontalLayout {
         padding-left: 16px;
-        padding-right: 12px;
+        padding-right: 16px;
         padding-top: 6px;
         padding-bottom: 6px;
         spacing: 12px;
         if !root.inline: VerticalLayout {
             alignment: center;
             horizontal-stretch: 1;
-            spacing: 2px;
+            spacing: 4px;
             Text { text: root.label; color: Theme.ink2; font-size: 12px; }
             Text {
-                text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
+                text: root.value;
                 color: Theme.ink;
                 font-size: 15px;
                 font-weight: 500;
@@ -533,24 +604,21 @@ export component ChoiceRow inherits Rectangle {
         if root.inline: Text {
             text: root.label;
             color: Theme.ink;
-            font-size: 15px;
-            font-weight: 500;
+            font-size: 14px;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
         if root.inline: Text {
-            text: root.current-index >= 0 && root.current-index < root.model.length ? root.model[root.current-index] : "";
-            color: Theme.ink2;
-            font-size: 13px;
-            font-family: root.mono-value ? "monospace" : "";
+            text: root.value;
+            color: Theme.ink;
+            font-size: root.mono-value ? 13px : 14px;
+            font-weight: 500;
+            font-family: root.mono-value ? Theme.mono : "";
             vertical-alignment: center;
         }
-        VerticalLayout {
-            alignment: center;
-            Icon { name: "updown"; size: 18px; color: Theme.ink3; stroke-width: 2px; }
-        }
+        VerticalLayout { alignment: center; Chevron { } }
     }
-    TouchArea {
+    ta := TouchArea {
         clicked => {
             Picker.title = root.label;
             Picker.items = root.model;
@@ -564,7 +632,6 @@ export component ChoiceRow inherits Rectangle {
 // Нижний лист: затемнение и контейнер.
 export component SheetFrame inherits Rectangle {
     in property <string> title;
-    in property <length> max-content: 460px;
     callback dismiss();
     background: Theme.scrim;
     TouchArea { clicked => { root.dismiss(); } }
@@ -573,12 +640,12 @@ export component SheetFrame inherits Rectangle {
         width: parent.width;
         height: sheet-lay.preferred-height;
         background: Theme.surface;
-        border-top-left-radius: 24px;
-        border-top-right-radius: 24px;
+        border-top-left-radius: 28px;
+        border-top-right-radius: 28px;
         TouchArea { }
         sheet-lay := VerticalLayout {
-            padding-top: 10px;
-            padding-bottom: 12px;
+            padding: 12px;
+            padding-bottom: 24px;
             HorizontalLayout {
                 alignment: center;
                 Rectangle {
@@ -588,19 +655,22 @@ export component SheetFrame inherits Rectangle {
                     background: Theme.ring;
                 }
             }
-            if root.title != "": Text {
-                text: root.title;
-                color: Theme.ink;
-                font-size: 17px;
-                font-weight: 600;
-                letter-spacing: -0.2px;
-                overflow: elide;
-                horizontal-alignment: center;
-                height: 48px;
-                vertical-alignment: center;
+            if root.title != "": HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                height: 64px;
+                Text {
+                    text: root.title;
+                    color: Theme.ink;
+                    font-size: 20px;
+                    font-weight: 600;
+                    letter-spacing: -0.2px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
             }
             Flickable {
-                height: min(body.preferred-height, root.height - 200px);
+                height: min(body.preferred-height, root.height - 220px);
                 content-height: body.preferred-height;
                 body := VerticalLayout {
                     width: parent.width;
@@ -615,27 +685,34 @@ export component SheetFrame inherits Rectangle {
 export component SheetItem inherits Rectangle {
     in property <string> text;
     in property <string> icon;
-    in property <color> tint: Theme.ink;
+    in property <bool> danger: false;
     callback clicked();
-    height: 52px;
+    height: 56px;
+    border-radius: 12px;
     background: ta.pressed ? Theme.ink.with-alpha(0.05) : transparent;
     HorizontalLayout {
-        padding-left: 20px;
-        padding-right: 20px;
+        padding-left: 12px;
+        padding-right: 12px;
         spacing: 16px;
         if root.icon != "": VerticalLayout {
             alignment: center;
-            Icon { name: root.icon; color: root.tint; size: 20px; }
+            Icon { name: root.icon; color: root.danger ? Theme.bad : Theme.ink2; }
         }
         Text {
             text: root.text;
-            color: root.tint;
+            color: root.danger ? Theme.bad : Theme.ink;
             font-size: 15px;
             font-weight: 500;
             vertical-alignment: center;
         }
     }
     ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Разделитель между группами пунктов листа.
+export component SheetDivider inherits Rectangle {
+    height: 17px;
+    Divider { x: 12px; width: parent.width - 24px; }
 }
 
 // Нижняя панель вкладок.
@@ -645,7 +722,7 @@ export component NavBar inherits Rectangle {
     in property <length> inset;
     callback open(string);
     height: 76px + root.inset;
-    background: Theme.surface;
+    background: Theme.bg;
     // линия-разделитель — строго по верхнему краю (без y Slint центрирует элемент)
     Rectangle {
         x: 0;
@@ -661,6 +738,7 @@ export component NavBar inherits Rectangle {
         height: 76px;
         padding-left: 8px;
         padding-right: 8px;
+        padding-bottom: 8px;
         for tab in [
             { id: "main", icon: "globe", text: "Серверы" },
             { id: "routing", icon: "route", text: "Маршруты" },
@@ -670,19 +748,19 @@ export component NavBar inherits Rectangle {
             horizontal-stretch: 1;
             VerticalLayout {
                 alignment: center;
-                spacing: 4px;
+                spacing: 6px;
                 HorizontalLayout {
                     alignment: center;
                     Icon {
                         name: tab.icon;
-                        color: root.current == tab.id ? Theme.ink : Theme.ink2;
+                        color: root.current == tab.id ? Theme.accent : Theme.ink2;
                     }
                 }
                 Text {
                     text: tab.text;
                     color: root.current == tab.id ? Theme.ink : Theme.ink2;
                     font-size: 11px;
-                    font-weight: root.current == tab.id ? 600 : 500;
+                    font-weight: 500;
                     horizontal-alignment: center;
                 }
             }

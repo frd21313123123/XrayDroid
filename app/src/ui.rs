@@ -67,7 +67,6 @@ fn refresh_servers(ui: &MainWindow, st: &State) {
     ui.set_current_group(idx as i32);
     ui.set_servers(model(st.server_items()));
     ui.set_selected_name(st.cfg.selected_profile().map(|p| crate::fonts::text(&p.display_name())).unwrap_or_default().into());
-    ui.set_selected_proto(st.cfg.selected_profile().map(|p| p.protocol.name()).unwrap_or_default().into());
 }
 
 fn refresh_routing(ui: &MainWindow, st: &State) {
@@ -81,6 +80,11 @@ fn refresh_routing(ui: &MainWindow, st: &State) {
     ui.set_preset_index(PRESETS.iter().position(|(id, _)| *id == st.cfg.routing.preset).unwrap_or(0) as i32);
     ui.set_splits(model(st.split_items()));
     ui.set_geo_status(st.geo_status().into());
+}
+
+fn refresh_split_servers(ui: &MainWindow, st: &State) {
+    ui.set_split_servers(model(st.split_server_items()));
+    ui.set_split_server(st.split_server_item());
 }
 
 fn refresh_split_apps(ui: &MainWindow, st: &State) {
@@ -467,6 +471,18 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             };
             if changed {
                 restart_if_running(&h);
+            }
+        });
+    }
+    {
+        // «Подключиться» в листе сервера: выбрать его и включить VPN, если он выключен
+        let w = ui.as_weak();
+        ui.on_connect_server(move |id| {
+            let ui = w.unwrap();
+            ui.invoke_select_server(id);
+            let stt = status::get();
+            if !stt.running && !stt.connecting {
+                ui.invoke_toggle_vpn();
             }
         });
     }
@@ -1024,7 +1040,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 }
                 st.split_filter.clear();
                 ui.set_split_filter(SharedString::new());
-                ui.set_split_servers(model(st.split_server_items()));
+                refresh_split_servers(&ui, &st);
                 refresh_split_apps(&ui, &st);
             }
             load_apps(&ui, &s, &h);
@@ -1039,7 +1055,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             let ui = w.unwrap();
             let mut st = s.borrow_mut();
             st.split_server = id.to_string();
-            ui.set_split_servers(model(st.split_server_items()));
+            refresh_split_servers(&ui, &st);
         });
     }
     {
@@ -1240,17 +1256,16 @@ pub fn apply_status(ui: &MainWindow, last: &RefCell<Option<(u64, u64, std::time:
         ui.set_status_sub("Подождите".into());
         return;
     }
+    // таймер идёт только при работающем VPN, иначе — нули
+    let secs = if s.running && s.error.is_empty() && s.started_ms > 0 { (state::now_secs() * 1000 - s.started_ms) / 1000 } else { 0 };
+    ui.set_timer_text(fmt_uptime(secs).into());
     if !s.error.is_empty() {
         ui.set_status_error(true);
         ui.set_status_title("Ошибка".into());
         ui.set_status_sub(s.error.clone().into());
-    } else if s.running {
-        ui.set_status_title("Защищено".into());
-        let secs = if s.started_ms > 0 { (state::now_secs() * 1000 - s.started_ms) / 1000 } else { 0 };
-        ui.set_status_sub(fmt_uptime(secs).into());
     } else {
-        ui.set_status_title("Не подключено".into());
-        ui.set_status_sub("Нажмите, чтобы подключиться".into());
+        ui.set_status_title(if s.running { "Защищено" } else { "Не подключено" }.into());
+        ui.set_status_sub(SharedString::new());
     }
     if s.running {
         let now = std::time::Instant::now();
