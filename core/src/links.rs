@@ -101,6 +101,8 @@ fn apply_stream_query(p: &mut Profile, q: &HashMap<String, String>) {
     p.flow = g("flow");
     p.allow_insecure = matches!(q.get("allowInsecure").map(|s| s.as_str()), Some("1") | Some("true"))
         || matches!(q.get("insecure").map(|s| s.as_str()), Some("1") | Some("true"));
+    p.pinned_cert_sha256 = g("pcs");
+    p.verify_name = g("vcn");
 }
 
 fn stream_query(p: &Profile) -> Vec<(String, String)> {
@@ -132,6 +134,8 @@ fn stream_query(p: &Profile) -> Vec<(String, String)> {
     push("pbk", &p.public_key);
     push("sid", &p.short_id);
     push("spx", &p.spider_x);
+    push("pcs", &p.pinned_cert_sha256);
+    push("vcn", &p.verify_name);
     if p.allow_insecure {
         v.push(("allowInsecure".into(), "1".into()));
     }
@@ -194,6 +198,9 @@ pub fn parse_link(line: &str) -> Option<Profile> {
                 p.sni = s("sni");
                 p.alpn = s("alpn");
                 p.fingerprint = s("fp");
+                p.allow_insecure = matches!(s("allowInsecure").as_str(), "1" | "true") || matches!(s("insecure").as_str(), "1" | "true");
+                p.pinned_cert_sha256 = s("pcs");
+                p.verify_name = s("vcn");
                 if p.remarks.is_empty() && !frag.is_empty() {
                     p.remarks = pct(frag);
                 }
@@ -248,6 +255,9 @@ pub fn parse_link(line: &str) -> Option<Profile> {
             p.port = u.port;
             p.sni = g("sni");
             p.allow_insecure = matches!(g("insecure").as_str(), "1" | "true");
+            // Hysteria: pinSHA256; Xray: pcs
+            p.pinned_cert_sha256 = if g("pcs").is_empty() { g("pinSHA256") } else { g("pcs") };
+            p.verify_name = g("vcn");
             p.obfs = g("obfs");
             p.obfs_password = g("obfs-password");
             p.security = "tls".into();
@@ -355,6 +365,8 @@ pub fn to_link(p: &Profile) -> String {
                 "host": p.host, "path": p.path,
                 "tls": if p.security == "none" { "" } else { &p.security },
                 "sni": p.sni, "alpn": p.alpn, "fp": p.fingerprint,
+                "insecure": if p.allow_insecure { "1" } else { "0" },
+                "pcs": p.pinned_cert_sha256, "vcn": p.verify_name,
             });
             format!("vmess://{}", STANDARD.encode(js.to_string()))
         }
@@ -369,6 +381,9 @@ pub fn to_link(p: &Profile) -> String {
             }
             if p.allow_insecure {
                 q.push(("insecure".into(), "1".into()));
+            }
+            if !p.pinned_cert_sha256.is_empty() {
+                q.push(("pinSHA256".into(), p.pinned_cert_sha256.clone()));
             }
             if !p.obfs.is_empty() {
                 q.push(("obfs".into(), p.obfs.clone()));

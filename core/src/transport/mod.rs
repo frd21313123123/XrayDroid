@@ -1,5 +1,6 @@
 //! Транспортный уровень: TCP → (TLS | REALITY) → (WebSocket | HTTPUpgrade | raw).
 
+pub mod certs;
 pub mod http2;
 pub mod reality;
 pub mod secure;
@@ -124,22 +125,23 @@ fn plain_tls_only() -> &'static Mutex<std::collections::HashSet<String>> {
 async fn tls_for_profile(tcp: TcpStream, p: &Profile, alpn: &str) -> io::Result<BoxStream> {
     let sni = sni_of(p);
     let key = format!("{}:{}|{}", p.address, p.port, sni);
+    let policy = certs::CertPolicy::of(p);
     if browser_hello(&p.fingerprint) && !plain_tls_only().lock().contains(&key) {
         let protos: Vec<String> = alpn.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let hs = tls13::handshake(Box::new(tcp), &sni, &protos, tls13::Mode::Verify { insecure: p.allow_insecure });
+        let hs = tls13::handshake(Box::new(tcp), &sni, &protos, tls13::Mode::Verify(&policy));
         match tokio::time::timeout(CONNECT_TIMEOUT, hs).await {
             Ok(Ok(conn)) => return Ok(conn.into_stream()),
             Err(_) => return Err(io_err("таймаут TLS-рукопожатия")),
             Ok(Err(e)) => {
                 log::info!("TLS {}: рукопожатие в стиле Chrome не удалось ({e}), пробую стандартное", p.address);
                 let tcp = connect_tcp(&server_addr(p)).await?;
-                let s = tls_connect(tcp, &sni, alpn, p.allow_insecure).await?;
+                let s = tls_connect(tcp, &sni, alpn, &policy).await?;
                 plain_tls_only().lock().insert(key);
                 return Ok(Box::new(s));
             }
         }
     }
-    Ok(Box::new(tls_connect(tcp, &sni, alpn, p.allow_insecure).await?))
+    Ok(Box::new(tls_connect(tcp, &sni, alpn, &policy).await?))
 }
 
 // ───────────────────────── TLS (rustls) ─────────────────────────
@@ -188,10 +190,10 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
     }
 }
 
-fn tls_config(alpn: &str, insecure: bool) -> Arc<rustls::ClientConfig> {
-    static CACHE: OnceLock<Mutex<HashMap<(String, bool), Arc<rustls::ClientConfig>>>> = OnceLock::new();
+fn tls_config(alpn: &str, policy: &certs::CertPolicy) -> Arc<rustls::ClientConfig> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String), Arc<rustls::ClientConfig>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (alpn.to_string(), insecure);
+    let key = (alpn.to_string(), policy.cache_key());
     if let Some(c) = cache.lock().get(&key) {
         return c.clone();
     }
@@ -199,12 +201,7 @@ fn tls_config(alpn: &str, insecure: bool) -> Arc<rustls::ClientConfig> {
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .unwrap();
-    let mut cfg = if insecure {
-        builder.dangerous().with_custom_certificate_verifier(Arc::new(NoVerify(provider))).with_no_client_auth()
-    } else {
-        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        builder.with_root_certificates(roots).with_no_client_auth()
-    };
+    let mut cfg = certs::client_config(builder, policy, provider);
     cfg.alpn_protocols =
         alpn.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.as_bytes().to_vec()).collect();
     let cfg = Arc::new(cfg);
@@ -212,11 +209,16 @@ fn tls_config(alpn: &str, insecure: bool) -> Arc<rustls::ClientConfig> {
     cfg
 }
 
-pub async fn tls_connect<S>(stream: S, sni: &str, alpn: &str, insecure: bool) -> io::Result<tokio_rustls::client::TlsStream<S>>
+pub async fn tls_connect<S>(
+    stream: S,
+    sni: &str,
+    alpn: &str,
+    policy: &certs::CertPolicy,
+) -> io::Result<tokio_rustls::client::TlsStream<S>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let connector = tokio_rustls::TlsConnector::from(tls_config(alpn, insecure));
+    let connector = tokio_rustls::TlsConnector::from(tls_config(alpn, policy));
     let name = ServerName::try_from(sni.to_string()).map_err(|_| io_err(format!("неверный SNI: {sni}")))?;
     tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(name, stream))
         .await

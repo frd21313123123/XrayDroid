@@ -25,6 +25,7 @@ VPN-клиент для Android в духе **v2rayN / v2rayNG**, полност
 **Транспорты:**
 - TCP (raw), в том числе с HTTP-маскировкой (`headerType=http`)
 - TLS и REALITY; при `fp=chrome` (и других отпечатках) обычный TLS идёт с ClientHello как у Chrome — как uTLS в Xray; для серверов только с TLS 1.2 — автоматический откат на стандартный TLS
+- проверка сертификата как в Xray 26: закрепление по SHA-256 (`pcs` / `pinnedPeerCertSha256`) — для самоподписанных сертификатов и чужого SNI, проверка по другому имени (`vcn` / `verifyPeerCertByName`), а также старый `allowInsecure`; для Hysteria2 — `pinSHA256`
 - WebSocket, HTTPUpgrade
 - gRPC — режимы `gun` и `multi`, h2c / TLS / REALITY
 - XHTTP (SplitHTTP) — режимы `auto`, `stream-one`, `stream-up`, `packet-up`, h2c / TLS / REALITY

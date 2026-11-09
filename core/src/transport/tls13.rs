@@ -315,8 +315,8 @@ fn cert_ed25519(der: &[u8]) -> Option<([u8; 32], Vec<u8>)> {
 /// Режим рукопожатия.
 pub enum Mode<'a> {
     Reality(&'a RealityConfig),
-    /// Обычный TLS 1.3 с проверкой сертификата (или без неё)
-    Verify { insecure: bool },
+    /// Обычный TLS 1.3 с проверкой сертификата по правилам профиля (insecure / pcs / vcn)
+    Verify(&'a super::certs::CertPolicy),
 }
 
 fn cert_list(msg: &[u8]) -> Vec<Vec<u8>> {
@@ -338,37 +338,10 @@ fn cert_list(msg: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-fn verify_chain(chain: &[Vec<u8>], sni: &str) -> io::Result<()> {
-    use rustls::client::danger::ServerCertVerifier;
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use std::sync::OnceLock;
-    static VERIFIER: OnceLock<std::sync::Arc<rustls::client::WebPkiServerVerifier>> = OnceLock::new();
-    let v = VERIFIER.get_or_init(|| {
-        let mut roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        // дополнительный корневой сертификат (PEM), напр. для собственного CA
-        if let Ok(path) = std::env::var("XD_EXTRA_CA") {
-            if let Ok(pem) = std::fs::read_to_string(path) {
-                for block in pem.split("-----BEGIN CERTIFICATE-----").skip(1) {
-                    let b64: String = block.split("-----END").next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
-                    if let Ok(der) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                        let _ = roots.add(rustls::pki_types::CertificateDer::from(der));
-                    }
-                }
-            }
-        }
-        rustls::client::WebPkiServerVerifier::builder_with_provider(
-            std::sync::Arc::new(roots),
-            std::sync::Arc::new(rustls::crypto::ring::default_provider()),
-        )
-        .build()
-        .expect("verifier")
-    });
-    let ee = CertificateDer::from(chain.first().ok_or_else(|| io_err("TLS: сервер не прислал сертификат"))?.clone());
-    let inter: Vec<CertificateDer> = chain[1..].iter().map(|c| CertificateDer::from(c.clone())).collect();
-    let name = ServerName::try_from(sni.to_string()).map_err(|_| io_err("TLS: неверное имя сервера"))?;
-    v.verify_server_cert(&ee, &inter, &name, &[], UnixTime::now())
-        .map(|_| ())
-        .map_err(|e| io_err(format!("TLS: сертификат не прошёл проверку: {e}")))
+fn verify_chain(chain: &[Vec<u8>], sni: &str, policy: &super::certs::CertPolicy) -> io::Result<()> {
+    let certs: Vec<rustls::pki_types::CertificateDer> =
+        chain.iter().map(|c| rustls::pki_types::CertificateDer::from(c.clone())).collect();
+    policy.verify(&certs, sni).map_err(|e| io_err(format!("TLS: {e}")))
 }
 
 fn verify_cert_verify(cert: &[u8], msg: &[u8], transcript_hash: &[u8]) -> io::Result<()> {
@@ -433,7 +406,7 @@ pub async fn handshake(io: BoxStream, sni: &str, alpn: &[String], mode: Mode<'_>
             sid[..16].copy_from_slice(&pt);
             sid[16..].copy_from_slice(&tag);
         }
-        Mode::Verify { .. } => crate::common::random_bytes(&mut sid),
+        Mode::Verify(_) => crate::common::random_bytes(&mut sid),
     }
     hello[39..71].copy_from_slice(&sid);
 
@@ -484,9 +457,11 @@ pub async fn handshake(io: BoxStream, sni: &str, alpn: &[String], mode: Mode<'_>
                 transcript.extend_from_slice(&msg);
             }
             15 => {
-                if let Mode::Verify { insecure: false } = mode {
-                    verify_chain(&chain, sni)?;
-                    verify_cert_verify(&chain[0], &msg, &hash.hash(&transcript))?;
+                if let Mode::Verify(policy) = mode {
+                    if !policy.insecure {
+                        verify_chain(&chain, sni, policy)?;
+                        verify_cert_verify(&chain[0], &msg, &hash.hash(&transcript))?;
+                    }
                 }
                 transcript.extend_from_slice(&msg);
             }

@@ -83,6 +83,10 @@ pub struct Profile {
     pub alpn: String,
     pub fingerprint: String,
     pub allow_insecure: bool,
+    /// SHA-256 сертификата сервера (pcs / pinnedPeerCertSha256), hex, несколько — через запятую
+    pub pinned_cert_sha256: String,
+    /// Имена для проверки сертификата вместо SNI (vcn / verifyPeerCertByName)
+    pub verify_name: String,
     pub public_key: String,
     pub short_id: String,
     pub spider_x: String,
