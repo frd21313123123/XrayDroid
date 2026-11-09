@@ -2,6 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
+// Версия можно переопределить переменными окружения (их задаёт CI при каждой сборке).
+def xdVersionName = System.getenv('XD_VERSION_NAME') ?: '0.2.0'
+def xdVersionCode = (System.getenv('XD_VERSION_CODE') ?: '2') as int
+
 android {
     namespace 'com.xraydroid'
     compileSdk 35
@@ -10,8 +14,8 @@ android {
         applicationId 'com.xraydroid'
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName '0.2.0'
+        versionCode xdVersionCode
+        versionName xdVersionName
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }

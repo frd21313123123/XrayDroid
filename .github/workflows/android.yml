@@ -1,11 +1,17 @@
 name: Android APK
 
+# Каждый push в main (в т.ч. слияние PR) собирает APK и публикует новый релиз.
+# PR только собираются и тестируются, без публикации.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+# Сборки в main выполняются по очереди, а не параллельно.
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -36,25 +42,39 @@ jobs:
       - name: Тесты ядра
         run: cargo test -p xd-core
 
+      - name: Версия сборки
+        run: |
+          # Базовая версия берётся из Cargo.toml (workspace), к ней добавляется номер запуска.
+          BASE=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          VERSION="${BASE}-build.${GITHUB_RUN_NUMBER}"
+          # versionCode должен расти от сборки к сборке; +2, чтобы превзойти текущий код 2.
+          echo "XD_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          echo "XD_VERSION_CODE=$((GITHUB_RUN_NUMBER + 2))" >> "$GITHUB_ENV"
+          echo "APK=XrayDroid-$VERSION.apk" >> "$GITHUB_ENV"
+          echo "Версия: $VERSION"
+
       - name: Сборка APK
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
           GRADLE: ./gradlew
         run: ./build-android.sh
 
-      - name: Переименование
-        run: |
-          V=$(grep versionName android/app/build.gradle | sed -E "s/.*'(.*)'.*/\1/")
-          cp android/app/build/outputs/apk/release/app-release.apk XrayDroid-$V.apk
-          echo "APK=XrayDroid-$V.apk" >> $GITHUB_ENV
+      - name: Переименование APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "$APK"
 
       - uses: actions/upload-artifact@v4
         with:
           name: XrayDroid-apk
           path: ${{ env.APK }}
 
-      - name: Релиз (для тегов v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Публикация релиза (только push в main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.XD_VERSION_NAME }}
+          name: XrayDroid ${{ env.XD_VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
           files: ${{ env.APK }}
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true
