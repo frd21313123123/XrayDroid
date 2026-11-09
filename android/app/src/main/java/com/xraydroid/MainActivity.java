@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class MainActivity extends NativeActivity {
     private static final int REQ_VPN = 1;
     private BroadcastReceiver receiver;
+    private Updater updater;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,6 +48,8 @@ public class MainActivity extends NativeActivity {
         } else {
             registerReceiver(receiver, f);
         }
+        updater = new Updater(this);
+        updater.checkOnStart();
     }
 
     @Override
@@ -58,6 +61,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onDestroy() {
         try { unregisterReceiver(receiver); } catch (Exception ignored) {}
+        if (updater != null) updater.release();
         super.onDestroy();
         // Интерфейс Slint нельзя повторно инициализировать в том же процессе,
         // поэтому процесс UI завершается вместе с окном (VPN живёт в процессе :vpn).
