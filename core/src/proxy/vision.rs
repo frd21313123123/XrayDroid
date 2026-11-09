@@ -12,10 +12,9 @@ use parking_lot::Mutex;
 use rand::Rng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::vless::{first_payload, request_header, CMD_TCP, FLOW_VISION};
-use crate::common::{io_err, Address, BoxStream};
-use crate::config::Profile;
-use crate::transport::{self, reality};
+use super::vless::first_payload;
+use crate::common::{io_err, BoxStream};
+use crate::transport::secure::SecureConn;
 
 const CMD_CONTINUE: u8 = 0;
 const CMD_END: u8 = 1;
@@ -204,13 +203,10 @@ impl Unpadder {
     }
 }
 
-pub async fn run(p: &Profile, uuid: [u8; 16], app: BoxStream, dest: &Address) -> io::Result<()> {
-    let cfg = transport::reality_config(p)?;
-    let tcp = transport::connect_tcp(&transport::server_addr(p)).await?;
-    let conn = tokio::time::timeout(transport::CONNECT_TIMEOUT, reality::connect(tcp, &cfg))
-        .await
-        .map_err(|_| io_err("таймаут рукопожатия REALITY"))??;
-    let reality::RealityConn { mut reader, mut writer } = conn;
+/// XTLS Vision поверх защищённого слоя (REALITY / TLS 1.3 / VLESS Encryption).
+/// `header` — заголовок запроса VLESS (с flow = xtls-rprx-vision).
+pub async fn run(conn: SecureConn, uuid: [u8; 16], app: BoxStream, header: Vec<u8>) -> io::Result<()> {
+    let SecureConn { mut reader, mut writer } = conn;
 
     let traffic = Arc::new(Mutex::new(Traffic::new()));
     let (mut app_r, mut app_w) = tokio::io::split(app);
@@ -220,7 +216,6 @@ pub async fn run(p: &Profile, uuid: [u8; 16], app: BoxStream, dest: &Address) ->
     // ── uplink: приложение → сервер ──
     let t_up = traffic.clone();
     let last_up = last.clone();
-    let header = request_header(&uuid, CMD_TCP, dest, FLOW_VISION);
     let uplink = async move {
         let mut uuid_once = Some(uuid);
         let mut is_padding = true;

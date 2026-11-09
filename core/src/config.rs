@@ -87,6 +87,9 @@ impl Profile {
         if !self.security.is_empty() && self.security != "none" {
             s.push_str(&format!(" · {}", self.security));
         }
+        if self.protocol == Protocol::Vless && self.method.starts_with("mlkem") {
+            s.push_str(" · enc");
+        }
         if !self.flow.is_empty() {
             s.push_str(" · vision");
         }

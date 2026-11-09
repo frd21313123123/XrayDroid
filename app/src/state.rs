@@ -225,7 +225,11 @@ pub fn profile_to_form(p: &Profile) -> ProfileForm {
         username: p.username.clone().into(),
         method: p.method.clone().into(),
         method_index,
-        flow: if p.flow.starts_with("xtls-rprx-vision") { 1 } else { 0 },
+        flow: match p.flow.as_str() {
+            "xtls-rprx-vision" => 1,
+            "xtls-rprx-vision-udp443" => 2,
+            _ => 0,
+        },
         network: NETWORKS.iter().position(|n| *n == p.network.as_str()).unwrap_or(0) as i32,
         header_type: p.header_type.clone().into(),
         host: p.host.clone().into(),
@@ -273,10 +277,22 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     p.method = match protocol {
         Protocol::Shadowsocks => SS_METHODS[f.method_index.clamp(0, 5) as usize].to_string(),
         Protocol::Vmess => VMESS_METHODS[f.method_index.clamp(0, 2) as usize].to_string(),
-        Protocol::Vless => "none".into(),
+        Protocol::Vless => {
+            let m = f.method.trim();
+            if m.is_empty() { "none".into() } else { m.to_string() }
+        }
         _ => String::new(),
     };
-    p.flow = if protocol == Protocol::Vless && f.flow == 1 { "xtls-rprx-vision".into() } else { String::new() };
+    p.flow = match (protocol, f.flow) {
+        (Protocol::Vless, 1) => "xtls-rprx-vision".into(),
+        (Protocol::Vless, 2) => "xtls-rprx-vision-udp443".into(),
+        _ => String::new(),
+    };
+    if protocol == Protocol::Vless {
+        if let Err(e) = xd_core::proxy::vless_enc::parse(&p.method) {
+            return Err(e.to_string());
+        }
+    }
     let stream = matches!(protocol, Protocol::Vless | Protocol::Vmess | Protocol::Trojan);
     p.network = if stream { NETWORKS[f.network.clamp(0, 4) as usize].into() } else { "tcp".into() };
     p.security = if stream { SECURITIES[f.security.clamp(0, 2) as usize].into() } else { "none".into() };
@@ -305,8 +321,9 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     if p.flow.is_empty() && base.map(|b| b.flow != p.flow).unwrap_or(false) {
         // flow сброшен вручную — ок
     }
-    if p.flow.starts_with("xtls") && p.security != "reality" {
-        return Err("Vision в этом клиенте работает только с REALITY".into());
+    let has_enc = p.method != "none" && !p.method.is_empty() && protocol == Protocol::Vless;
+    if p.flow.starts_with("xtls") && !has_enc && (p.security == "none" || p.network != "tcp") {
+        return Err("Vision требует TLS или REALITY с транспортом TCP, либо VLESS Encryption".into());
     }
     Ok(p)
 }

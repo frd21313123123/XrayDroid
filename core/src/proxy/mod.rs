@@ -5,6 +5,7 @@ pub mod socks;
 pub mod trojan;
 pub mod vision;
 pub mod vless;
+pub mod vless_enc;
 pub mod vmess;
 
 use std::io;

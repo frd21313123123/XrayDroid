@@ -2,6 +2,8 @@
 
 pub mod http2;
 pub mod reality;
+pub mod secure;
+pub mod tls13;
 
 use std::collections::HashMap;
 use std::io;
@@ -35,6 +37,10 @@ pub async fn connect_tcp(addr: &Address) -> io::Result<TcpStream> {
 
 pub fn server_addr(p: &Profile) -> Address {
     Address::new_domain(p.address.clone(), p.port)
+}
+
+pub fn sni_for(p: &Profile) -> String {
+    sni_of(p)
 }
 
 fn sni_of(p: &Profile) -> String {

@@ -9,7 +9,11 @@ VPN-клиент для Android в духе **v2rayN / v2rayNG**, полност
 ## Возможности
 
 **Протоколы** (собственная реализация, проверена против Xray-core 26.3):
-- VLESS, в том числе **REALITY** и **XTLS Vision** (`xtls-rprx-vision`, с переходом в direct-режим)
+- **VLESS**:
+  - **XTLS Vision** (`xtls-rprx-vision`, `-udp443`) поверх REALITY, обычного TLS 1.3 или VLESS Encryption — с переходом в direct-режим, как в Xray;
+  - **VLESS Encryption** — постквантовое шифрование Xray (`mlkem768x25519plus`: ML-KEM-768 + X25519, режимы `native`/`xorpub`/`random`, паддинг);
+  - UDP: обычный, а через Vision — **XUDP** (Mux.Cool), как в Xray;
+  - для Vision+TLS — собственный TLS 1.3-клиент с полной проверкой сертификата (цепочка, имя, CertificateVerify).
 - VMess AEAD (aes-128-gcm, chacha20-poly1305)
 - Trojan
 - Shadowsocks: AEAD и 2022 (`2022-blake3-*`)
@@ -86,7 +90,7 @@ cargo run -p xd-core --release --example itest -- socks '<ссылка>' 10808  
 ## Ограничения
 
 - нет mKCP, QUIC и Hysteria2; XHTTP только поверх HTTP/2 (без HTTP/3 и раздельного `downloadSettings`);
-- Vision работает только вместе с REALITY (`flow` с обычным TLS не поддерживается);
+- Vision поверх TLS требует TLS 1.3 на сервере (как и в Xray);
 - нет сканера QR-кодов и Mux.
 
 ## Лицензия

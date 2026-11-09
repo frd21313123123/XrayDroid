@@ -601,9 +601,18 @@ export component MainWindow inherits Window {
                         }
                         if root.form.protocol == 0: Choice {
                             label: "Flow";
-                            model: ["нет", "xtls-rprx-vision"];
+                            model: ["нет", "xtls-rprx-vision", "xtls-rprx-vision-udp443"];
                             current-index: root.form.flow;
                             selected(i) => { root.form.flow = i; }
+                        }
+                        if root.form.protocol == 0: Field {
+                            label: "Encryption (VLESS Encryption)";
+                            placeholder: "none или mlkem768x25519plus.…";
+                            text: root.form.method;
+                            edited(t) => { root.form.method = t; }
+                        }
+                        if root.form.protocol == 0 && root.form.method != "" && root.form.method != "none": Hint {
+                            text: "Постквантовое шифрование Xray (ML-KEM-768 + X25519). Строку encryption выдаёт сервер (xray vlessenc).";
                         }
                         if root.form.protocol == 1: Choice {
                             label: "Шифрование (security)";
@@ -1185,7 +1194,7 @@ export component MainWindow inherits Window {
                                 padding: 14px;
                                 spacing: 6px;
                                 SectionTitle { text: "ПОДДЕРЖИВАЕТСЯ"; }
-                                Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (+ XTLS Vision), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), SOCKS5"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (XTLS Vision, VLESS Encryption, XUDP), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), SOCKS5"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• TCP (+HTTP-маскировка), TLS, REALITY, WebSocket, HTTPUpgrade, gRPC, XHTTP"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Маршрутизация: домены, IP, geosite/geoip, порты, протоколы"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Подписки, тест задержки, FakeDNS, раздельное туннелирование"; }
