@@ -80,6 +80,15 @@ impl State {
         }
     }
 
+    /// Текущая вкладка — группа без ссылки (созданная вручную): новые серверы попадают в неё.
+    pub fn local_group(&self) -> Option<String> {
+        self.cfg
+            .subscriptions
+            .iter()
+            .find(|s| s.id == self.group && s.url.trim().is_empty())
+            .map(|s| s.id.clone())
+    }
+
     pub fn group_ids(&self) -> Vec<String> {
         self.cfg.profiles.iter().filter(|p| self.in_group(p)).map(|p| p.id.clone()).collect()
     }
@@ -112,7 +121,10 @@ impl State {
             .iter()
             .map(|s| {
                 let count = self.cfg.profiles.iter().filter(|p| p.sub_id == s.id).count();
-                let when = if s.last_update > 0 {
+                let local = s.url.trim().is_empty();
+                let when = if local {
+                    "Группа без ссылки — серверы добавляются вручную".to_string()
+                } else if s.last_update > 0 {
                     let ago = now_secs() - s.last_update;
                     if ago < 120 {
                         "Обновлено только что".to_string()
@@ -132,7 +144,8 @@ impl State {
                 SubItem {
                     id: s.id.clone().into(),
                     name: if s.remarks.is_empty() { "Подписка".into() } else { s.remarks.clone().into() },
-                    url: s.url.clone().into(),
+                    url: if local { "без ссылки".into() } else { s.url.clone().into() },
+                    local,
                     enabled: s.enabled,
                     count: format!("{count} серв.").into(),
                     has_usage: s.total > 0,

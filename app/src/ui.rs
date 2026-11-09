@@ -137,12 +137,20 @@ fn import_text(ui: &MainWindow, st: &S, host: &Arc<dyn Host>, text: &str) {
     let n = list.len();
     {
         let mut s = st.borrow_mut();
+        let mut list = list;
+        // открыта вкладка группы без ссылки — серверы попадают в неё
+        let local = s.local_group();
+        if let Some(g) = &local {
+            for p in &mut list {
+                p.sub_id = g.clone();
+            }
+        }
         let first = list[0].id.clone();
         s.cfg.profiles.extend(list);
         if s.cfg.selected_profile().is_none() {
             s.cfg.selected = first;
         }
-        if s.group != "" && s.group != "manual" {
+        if local.is_none() && s.group != "" && s.group != "manual" {
             s.group = String::new();
         }
         s.save();
@@ -158,7 +166,7 @@ fn update_subs(ui: &MainWindow, st: &S, _host: &Arc<dyn Host>, only: Option<Stri
             s.cfg
                 .subscriptions
                 .iter()
-                .filter(|x| x.enabled && only.as_ref().map(|o| *o == x.id).unwrap_or(true))
+                .filter(|x| x.enabled && !x.url.trim().is_empty() && only.as_ref().map(|o| *o == x.id).unwrap_or(true))
                 .cloned()
                 .collect(),
             s.cfg.settings.sub_user_agent.clone(),
@@ -243,31 +251,68 @@ fn with_state(f: impl FnOnce(&S)) {
     });
 }
 
+/// Одновременных проверок задержки.
+const DELAY_PARALLEL: usize = 10;
+/// Жёсткий предел на одну проверку: что бы ни случилось в ядре, сервер получит результат.
+const DELAY_HARD_LIMIT: Duration = Duration::from_secs(20);
+
 fn run_delay_tests(ui: &MainWindow, st: &S, ids: Vec<String>) {
     let (profiles, url) = {
         let mut s = st.borrow_mut();
-        for id in &ids {
-            s.testing.insert(id.clone());
+        let want: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        // серверы, которые уже проверяются, повторно не запускаем
+        let ps: Vec<Profile> = s
+            .cfg
+            .profiles
+            .iter()
+            .filter(|p| want.contains(p.id.as_str()) && !s.testing.contains(&p.id))
+            .cloned()
+            .collect();
+        for p in &ps {
+            s.testing.insert(p.id.clone());
         }
-        let ps: Vec<Profile> = s.cfg.profiles.iter().filter(|p| ids.contains(&p.id)).cloned().collect();
         refresh_servers(ui, &s);
         (ps, s.cfg.settings.test_url.clone())
     };
+    let total = profiles.len();
+    if total == 0 {
+        return;
+    }
     let w = ui.as_weak();
     let rt = xd_core::engine::shared_runtime();
-    let sem = Arc::new(tokio::sync::Semaphore::new(8));
+    let sem = Arc::new(tokio::sync::Semaphore::new(DELAY_PARALLEL));
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ok = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for p in profiles {
         let w = w.clone();
         let url = url.clone();
         let sem = sem.clone();
+        let done = done.clone();
+        let ok = ok.clone();
         rt.spawn(async move {
-            let _permit = sem.acquire().await;
-            let r = xd_core::engine::delay_test(&p, &url).await;
+            let _permit = sem.acquire_owned().await;
+            let id = p.id.clone();
+            let name = p.display_name();
+            // отдельная задача: паника или зависание в ядре не оставят сервер в состоянии «…»
+            let job = tokio::spawn(async move { xd_core::engine::delay_test(&p, &url).await });
+            let abort = job.abort_handle();
+            let r = match tokio::time::timeout(DELAY_HARD_LIMIT, job).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => Err(std::io::Error::other(format!("сбой проверки: {e}"))),
+                Err(_) => {
+                    abort.abort();
+                    Err(std::io::Error::other("таймаут"))
+                }
+            };
             if let Err(e) = &r {
-                log::info!("тест {}: {e}", p.display_name());
+                log::info!("тест {name}: {e}");
             }
             let ms = r.map(|d| d as i64).unwrap_or(-1);
-            let id = p.id.clone();
+            if ms > 0 {
+                ok.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let good = ok.load(std::sync::atomic::Ordering::SeqCst);
             let _ = w.upgrade_in_event_loop(move |ui| {
                 with_state(|st| {
                     let mut s = st.borrow_mut();
@@ -275,13 +320,31 @@ fn run_delay_tests(ui: &MainWindow, st: &S, ids: Vec<String>) {
                     if let Some(p) = s.cfg.profiles.iter_mut().find(|p| p.id == id) {
                         p.delay_ms = ms;
                     }
-                    if s.testing.is_empty() {
+                    // сохраняем по ходу, чтобы результаты не терялись
+                    if s.testing.is_empty() || n % 25 == 0 || n == total {
                         s.save();
                     }
-                    ui.set_servers(model(s.server_items()));
+                    update_server_row(&ui, &s, &id);
+                    if n == total && total > 1 {
+                        toast(&ui, &format!("Проверено серверов: {total}, отвечают: {good}"));
+                    }
                 });
             });
         });
+    }
+}
+
+/// Обновляет одну строку списка серверов, не пересоздавая весь список (позиция прокрутки сохраняется).
+fn update_server_row(ui: &MainWindow, st: &State, id: &str) {
+    use slint::Model;
+    let Some(p) = st.cfg.profiles.iter().find(|p| p.id == id) else { return };
+    let item = st.server_item(p, p.id == st.cfg.selected);
+    let m = ui.get_servers();
+    for i in 0..m.row_count() {
+        if m.row_data(i).is_some_and(|r| r.id.as_str() == id) {
+            m.set_row_data(i, item);
+            return;
+        }
     }
 }
 
@@ -654,6 +717,10 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                         if let Some(x) = st.cfg.profiles.iter_mut().find(|x| x.id == p.id) {
                             *x = p;
                         } else {
+                            let mut p = p;
+                            if let Some(g) = st.local_group() {
+                                p.sub_id = g;
+                            }
                             let id = p.id.clone();
                             st.cfg.profiles.push(p);
                             if st.cfg.selected_profile().is_none() {
@@ -705,7 +772,9 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
         ui.on_sub_save(move || {
             let ui = w.unwrap();
             let (id, name, url) = (ui.get_sub_id().to_string(), ui.get_sub_name().to_string(), ui.get_sub_url().trim().to_string());
-            if !url.starts_with("http") {
+            // пустой URL — группа без ссылки: вкладка создаётся без импорта подписки
+            let url = if ui.get_sub_group() { String::new() } else { url };
+            if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
                 toast(&ui, "URL подписки должен начинаться с http(s)://");
                 return;
             }
@@ -714,15 +783,22 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 let new_id = if id.is_empty() {
                     let nid = Profile::new_id();
                     let n = st.cfg.subscriptions.len() + 1;
+                    let local = url.is_empty();
+                    let default_name = if local { format!("Группа {n}") } else { format!("Подписка {n}") };
                     st.cfg.subscriptions.push(Subscription {
                         id: nid.clone(),
-                        remarks: if name.trim().is_empty() { format!("Подписка {n}") } else { name.trim().into() },
-                        custom_name: !name.trim().is_empty(),
+                        remarks: if name.trim().is_empty() { default_name } else { name.trim().into() },
+                        custom_name: local || !name.trim().is_empty(),
                         url,
                         enabled: true,
                         ..Default::default()
                     });
-                    Some(nid)
+                    if local {
+                        // сразу открыть новую вкладку на главном экране
+                        st.group = nid.clone();
+                        refresh_servers(&ui, &st);
+                    }
+                    Some((nid, local))
                 } else {
                     if let Some(x) = st.cfg.subscriptions.iter_mut().find(|x| x.id == id) {
                         if x.remarks != name.trim() {
@@ -731,14 +807,17 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                         x.remarks = name.trim().into();
                         x.url = url;
                     }
+                    refresh_servers(&ui, &st);
                     None
                 };
                 st.save();
                 ui.set_subs(model(st.sub_items()));
                 new_id
             };
-            if let Some(nid) = new_id {
-                update_subs(&ui, &s, &h, Some(nid));
+            match new_id {
+                Some((_, true)) => toast(&ui, "Группа создана — добавляйте в неё серверы через «+» на главном экране"),
+                Some((nid, false)) => update_subs(&ui, &s, &h, Some(nid)),
+                None => {}
             }
         });
     }
@@ -751,6 +830,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 ui.set_sub_id(x.id.clone().into());
                 ui.set_sub_name(x.remarks.clone().into());
                 ui.set_sub_url(x.url.clone().into());
+                ui.set_sub_group(x.url.trim().is_empty());
                 ui.set_sub_dialog(true);
             }
         });
@@ -762,6 +842,18 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             ui.set_sub_id(SharedString::new());
             ui.set_sub_name(SharedString::new());
             ui.set_sub_url(SharedString::new());
+            ui.set_sub_group(false);
+            ui.set_sub_dialog(true);
+        });
+    }
+    {
+        let w = ui.as_weak();
+        ui.on_group_new(move || {
+            let ui = w.unwrap();
+            ui.set_sub_id(SharedString::new());
+            ui.set_sub_name(SharedString::new());
+            ui.set_sub_url(SharedString::new());
+            ui.set_sub_group(true);
             ui.set_sub_dialog(true);
         });
     }
@@ -1121,7 +1213,7 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             .cfg
             .subscriptions
             .iter()
-            .any(|x| x.enabled && state::now_secs() - x.last_update > 24 * 3600);
+            .any(|x| x.enabled && !x.url.trim().is_empty() && state::now_secs() - x.last_update > 24 * 3600);
         if stale && st.borrow().cfg.settings.sub_auto_update {
             let s = st.clone();
             let h = host.clone();
