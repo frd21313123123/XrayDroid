@@ -66,7 +66,7 @@ fn refresh_servers(ui: &MainWindow, st: &State) {
     ui.set_groups(state::strings(groups.into_iter().map(|g| g.1).collect()));
     ui.set_current_group(idx as i32);
     ui.set_servers(model(st.server_items()));
-    ui.set_selected_name(st.cfg.selected_profile().map(|p| p.display_name()).unwrap_or_default().into());
+    ui.set_selected_name(st.cfg.selected_profile().map(|p| crate::fonts::text(&p.display_name())).unwrap_or_default().into());
     ui.set_selected_proto(st.cfg.selected_profile().map(|p| p.protocol.name()).unwrap_or_default().into());
 }
 

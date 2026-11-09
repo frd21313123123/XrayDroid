@@ -67,7 +67,7 @@ impl State {
             g.push(("manual".into(), "Мои".into()));
         }
         for s in &self.cfg.subscriptions {
-            g.push((s.id.clone(), if s.remarks.is_empty() { "Подписка".into() } else { s.remarks.clone() }));
+            g.push((s.id.clone(), if s.remarks.is_empty() { "Подписка".into() } else { crate::fonts::text(&s.remarks) }));
         }
         g
     }
@@ -107,7 +107,7 @@ impl State {
         } else {
             ("—".to_string(), 0)
         };
-        ServerItem { id: p.id.clone().into(), name: p.display_name().into(), kind: kind_label(p).into(), delay: delay.into(), delay_state: state, selected }
+        ServerItem { id: p.id.clone().into(), name: crate::fonts::text(&p.display_name()).into(), kind: kind_label(p).into(), delay: delay.into(), delay_state: state, selected }
     }
 
     /// Все серверы для выбора в маршруте на отдельный сервер.
@@ -143,7 +143,7 @@ impl State {
                 let ratio = if s.total > 0 { (s.used as f64 / s.total as f64).clamp(0.0, 1.0) as f32 } else { 0.0 };
                 SubItem {
                     id: s.id.clone().into(),
-                    name: if s.remarks.is_empty() { "Подписка".into() } else { s.remarks.clone().into() },
+                    name: if s.remarks.is_empty() { "Подписка".into() } else { crate::fonts::text(&s.remarks).into() },
                     url: if local { "без ссылки".into() } else { s.url.clone().into() },
                     local,
                     enabled: s.enabled,
@@ -212,7 +212,7 @@ impl State {
                         .profiles
                         .iter()
                         .find(|p| p.id == sp.server)
-                        .map(|p| p.display_name())
+                        .map(|p| crate::fonts::text(&p.display_name()))
                         .unwrap_or_else(|| "сервер не выбран".into())
                         .into(),
                     apps: model(badges),
