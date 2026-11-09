@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use slint::{Color, ModelRc, SharedString, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
 use xd_core::config::{AppConfig, OutboundTag, Profile, Protocol, RoutingRule, SplitRoute};
 
-use crate::{AppBadge, AppItem, ProfileForm, RuleForm, RuleItem, ServerItem, SettingsForm, SplitForm, SplitItem, SubItem};
+use crate::{AppItem, ProfileForm, RuleForm, RuleItem, ServerItem, SettingsForm, SplitForm, SplitItem, SubItem};
 
 pub const SS_METHODS: [&str; 6] = [
     "aes-128-gcm",
@@ -110,6 +110,11 @@ impl State {
         ServerItem { id: p.id.clone().into(), name: crate::fonts::text(&p.display_name()).into(), kind: kind_label(p).into(), delay: delay.into(), delay_state: state, selected }
     }
 
+    /// Сервер, выбранный в редакторе маршрута (пустой id — не выбран).
+    pub fn split_server_item(&self) -> ServerItem {
+        self.cfg.profiles.iter().find(|p| p.id == self.split_server).map(|p| self.server_item(p, false)).unwrap_or_default()
+    }
+
     /// Все серверы для выбора в маршруте на отдельный сервер.
     pub fn split_server_items(&self) -> Vec<ServerItem> {
         self.cfg.profiles.iter().map(|p| self.server_item(p, p.id == self.split_server)).collect()
@@ -123,7 +128,7 @@ impl State {
                 let count = self.cfg.profiles.iter().filter(|p| p.sub_id == s.id).count();
                 let local = s.url.trim().is_empty();
                 let when = if local {
-                    "Группа без ссылки — серверы добавляются вручную".to_string()
+                    "Группа без ссылки · серверы добавлены вручную".to_string()
                 } else if s.last_update > 0 {
                     let ago = now_secs() - s.last_update;
                     if ago < 120 {
@@ -144,14 +149,15 @@ impl State {
                 SubItem {
                     id: s.id.clone().into(),
                     name: if s.remarks.is_empty() { "Подписка".into() } else { crate::fonts::text(&s.remarks).into() },
-                    url: if local { "без ссылки".into() } else { s.url.clone().into() },
                     local,
                     enabled: s.enabled,
-                    count: format!("{count} серв.").into(),
+                    // у группы без ссылки — просто число, у подписки — «4 сервера»
+                    count: if local { count.to_string() } else { format!("{count} {}", plural(count, "сервер", "сервера", "серверов")) }.into(),
                     has_usage: s.total > 0,
                     ratio,
                     warn: ratio > 0.8,
-                    used: format!("{} / {} ГБ", gb(s.used), gb(s.total)).into(),
+                    used: format!("{} ГБ", gb(s.used)).into(),
+                    limit: format!(" из {} ГБ", gb(s.total)).into(),
                     expire: expire_label(s.expire).into(),
                     updated: when.into(),
                 }
@@ -190,19 +196,13 @@ impl State {
             .splits
             .iter()
             .map(|sp| {
-                let badges: Vec<AppBadge> = sp
-                    .apps
-                    .iter()
-                    .take(3)
-                    .map(|pkg| AppBadge { letter: app_letter(&self.app_label(pkg)).into(), tint: app_tint(pkg) })
-                    .collect();
-                let d = sp.domain.len();
-                let meta = match (sp.apps.len(), d) {
+                let apps = |a: usize| format!("{a} {}", plural(a, "приложение", "приложения", "приложений"));
+                let sites = |d: usize| format!("{d} {}", plural(d, "сайт", "сайта", "сайтов"));
+                let meta = match (sp.apps.len(), sp.domain.len()) {
                     (0, 0) => "ничего не выбрано".to_string(),
-                    (0, d) => format!("{d} {}", plural(d, "сайт", "сайта", "сайтов")),
-                    (a, 0) => format!("{a} прил."),
-                    (a, d) if a <= 3 => format!("+ {d} {}", plural(d, "сайт", "сайта", "сайтов")),
-                    (a, d) => format!("{a} прил. · {d} {}", plural(d, "сайт", "сайта", "сайтов")),
+                    (0, d) => sites(d),
+                    (a, 0) => apps(a),
+                    (a, d) => format!("{} · {}", apps(a), sites(d)),
                 };
                 SplitItem {
                     id: sp.id.clone().into(),
@@ -215,7 +215,6 @@ impl State {
                         .map(|p| crate::fonts::text(&p.display_name()))
                         .unwrap_or_else(|| "сервер не выбран".into())
                         .into(),
-                    apps: model(badges),
                     meta: meta.into(),
                     enabled: sp.enabled,
                 }
@@ -266,7 +265,6 @@ fn app_list(apps: &[(String, String)], filter: &str, checked: impl Fn(&str) -> b
             label: label.clone().into(),
             checked: checked(pkg),
             letter: app_letter(label).into(),
-            tint: app_tint(pkg),
         })
         .collect();
     v.sort_by(|a, b| b.checked.cmp(&a.checked).then(a.label.to_lowercase().cmp(&b.label.to_lowercase())));
@@ -281,23 +279,6 @@ fn app_list(apps: &[(String, String)], filter: &str, checked: impl Fn(&str) -> b
 /// Первая буква названия для плитки приложения.
 pub fn app_letter(label: &str) -> String {
     label.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into())
-}
-
-/// Цвет плитки приложения — стабильный по имени пакета.
-pub fn app_tint(pkg: &str) -> Color {
-    const PALETTE: [(u8, u8, u8); 8] = [
-        (0x3f, 0x3f, 0x3a),
-        (0x1d, 0x4e, 0xd8),
-        (0x5b, 0x4b, 0xc4),
-        (0x2a, 0x8b, 0xc4),
-        (0xa1, 0x5c, 0x00),
-        (0x2f, 0x5d, 0x8a),
-        (0x0f, 0x7a, 0x3d),
-        (0x0f, 0x76, 0x6e),
-    ];
-    let h = pkg.bytes().fold(5381u32, |h, b| h.wrapping_mul(33).wrapping_add(b as u32));
-    let (r, g, b) = PALETTE[(h % 8) as usize];
-    Color::from_rgb_u8(r, g, b)
 }
 
 pub fn plural(n: usize, one: &'static str, few: &'static str, many: &'static str) -> &'static str {

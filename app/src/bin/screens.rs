@@ -149,8 +149,11 @@ fn main() {
     xraydroid::status::on_service(true, "", 1_310_000, 42_400_000, (xd_core_now() - 12 * 60 - 47) * 1000);
     xraydroid::ui::apply_status(&ui, &last);
     shot("2_main_connected");
+    {
+        use slint::Model;
+        ui.set_sheet_server(ui.get_servers().row_data(1).unwrap());
+    }
     ui.set_sheet("server".into());
-    ui.set_sheet_title("Нидерланды · Амстердам".into());
     shot("2b_server_sheet");
     ui.set_sheet("add".into());
     shot("2c_add_sheet");

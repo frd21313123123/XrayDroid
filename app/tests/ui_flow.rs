@@ -83,14 +83,25 @@ fn ui_flow() {
     ui.invoke_open_page("routing".into());
     pump(50);
     assert_eq!(ui.get_strategy_index(), 1);
-    click(200.0, 159.0); // строка «Стратегия DNS»
-    assert!(ui.global::<xraydroid::Picker>().get_visible(), "лист выбора должен открыться");
-    assert_eq!(ui.global::<xraydroid::Picker>().get_current(), 1);
-    // лист снизу: 3 строки по 52 px, нижняя — «IPOnDemand»
-    let sheet_h = 10.0 + 4.0 + 48.0 + 156.0 + 12.0;
-    let third_row = 844.0 - sheet_h + 62.0 + 52.0 * 2.0 + 26.0;
-    click(200.0, third_row);
-    assert!(!ui.global::<xraydroid::Picker>().get_visible());
+    // строку «Стратегия DNS» ищем нажатиями сверху вниз: она открывает лист выбора
+    // (другие строки открывают редакторы или чужой лист — возвращаемся и идём дальше)
+    let picker = ui.global::<xraydroid::Picker>();
+    let mut y = 100.0;
+    while y < 760.0 && !(picker.get_visible() && picker.get_title().as_str() == "Стратегия DNS") {
+        picker.set_visible(false);
+        if ui.get_page().as_str() != "routing" {
+            ui.invoke_open_page("routing".into());
+            pump(0);
+        }
+        click(200.0, y);
+        y += 8.0;
+    }
+    assert!(picker.get_visible(), "лист выбора должен открыться");
+    assert_eq!(picker.get_title().as_str(), "Стратегия DNS");
+    assert_eq!(picker.get_current(), 1);
+    // лист снизу: заголовок, 3 строки по 52 px, отступ 24 px; нижняя строка — «IPOnDemand»
+    click(200.0, 844.0 - 24.0 - 26.0);
+    assert!(!picker.get_visible());
     assert_eq!(ui.get_strategy_index(), 2, "выбор из листа дошёл до окна");
     let saved = xd_core::AppConfig::load(&dir.join("config.json"));
     assert_eq!(saved.routing.domain_strategy, "IPOnDemand");
@@ -145,19 +156,19 @@ fn ui_flow() {
         y += 2.0;
     }
     let (r1, r2) = (starts[1].expect("строка 2"), starts[2].expect("строка 3"));
-    assert!((r2 - r1 - 64.0).abs() <= 2.0, "строки по 64 px: {r1} {r2}");
+    assert!((r2 - r1 - 68.0).abs() <= 2.0, "строки по 68 px: {r1} {r2}");
 
     // короткое нажатие на «Вена» выбирает сервер
     ui.invoke_select_server("a".into());
-    click(200.0, r2 + 32.0);
+    click(200.0, r2 + 34.0);
     assert_eq!(selected_idx(), Some(2), "короткое нажатие выбирает сервер");
     // долгое нажатие на «Берлин» открывает меню и не меняет выбор
-    press(200.0, r1 + 32.0);
+    press(200.0, r1 + 34.0);
     pump(600);
-    release(200.0, r1 + 32.0);
+    release(200.0, r1 + 34.0);
     pump(0);
     assert_eq!(ui.get_sheet().as_str(), "server");
-    assert_eq!(ui.get_sheet_id().as_str(), "b");
+    assert_eq!(ui.get_sheet_server().id.as_str(), "b");
     assert_eq!(selected_idx(), Some(2), "долгое нажатие не меняет выбор");
     ui.set_sheet("".into());
 
