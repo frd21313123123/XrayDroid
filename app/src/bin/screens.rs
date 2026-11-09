@@ -96,6 +96,12 @@ fn main() {
     slint::platform::update_timers_and_animations();
     ui.invoke_edit_server(ui.get_servers().row_data_opt(0).unwrap().id);
     shot("5_edit");
+    ui.invoke_add_manual(5);
+    let mut f = ui.get_form();
+    f.obfs = 1;
+    f.address = "hy2.example.com".into();
+    ui.set_form(f);
+    shot("5b_edit_hy2");
     ui.invoke_open_page("routing".into());
     shot("6_routing");
     ui.invoke_rule_open(xd_core_first_rule(&dir));

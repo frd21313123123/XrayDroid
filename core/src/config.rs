@@ -12,6 +12,11 @@ pub enum Protocol {
     Trojan,
     Shadowsocks,
     Socks,
+    Hysteria2,
+    Tuic,
+    #[serde(rename = "anytls")]
+    AnyTls,
+    Http,
 }
 
 impl Protocol {
@@ -22,10 +27,28 @@ impl Protocol {
             Protocol::Trojan => "Trojan",
             Protocol::Shadowsocks => "Shadowsocks",
             Protocol::Socks => "SOCKS",
+            Protocol::Hysteria2 => "Hysteria2",
+            Protocol::Tuic => "TUIC",
+            Protocol::AnyTls => "AnyTLS",
+            Protocol::Http => "HTTP",
         }
     }
-    pub fn all() -> [Protocol; 5] {
-        [Protocol::Vless, Protocol::Vmess, Protocol::Trojan, Protocol::Shadowsocks, Protocol::Socks]
+    pub fn all() -> [Protocol; 9] {
+        [
+            Protocol::Vless,
+            Protocol::Vmess,
+            Protocol::Trojan,
+            Protocol::Shadowsocks,
+            Protocol::Socks,
+            Protocol::Hysteria2,
+            Protocol::Tuic,
+            Protocol::AnyTls,
+            Protocol::Http,
+        ]
+    }
+    /// Протоколы с выбором транспорта (ws, grpc, xhttp…)
+    pub fn has_transport(&self) -> bool {
+        matches!(self, Protocol::Vless | Protocol::Vmess | Protocol::Trojan)
     }
 }
 
@@ -63,6 +86,11 @@ pub struct Profile {
     pub public_key: String,
     pub short_id: String,
     pub spider_x: String,
+    /// Обфускация (Hysteria2: salamander)
+    pub obfs: String,
+    pub obfs_password: String,
+    /// Второй секрет (TUIC: пароль)
+    pub secret: String,
     /// Результат теста задержки, мс: 0 — не тестировался, -1 — ошибка
     pub delay_ms: i64,
 }
@@ -81,8 +109,11 @@ impl Profile {
     pub fn summary(&self) -> String {
         let mut s = self.protocol.name().to_string();
         let net = if self.network.is_empty() { "tcp" } else { &self.network };
-        if self.protocol != Protocol::Shadowsocks && self.protocol != Protocol::Socks {
+        if self.protocol.has_transport() {
             s.push_str(&format!(" · {}", net));
+        }
+        if self.protocol == Protocol::Hysteria2 && self.obfs == "salamander" {
+            s.push_str(" · salamander");
         }
         if !self.security.is_empty() && self.security != "none" {
             s.push_str(&format!(" · {}", self.security));

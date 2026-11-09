@@ -107,7 +107,16 @@ pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
 // ───────────────────────── TLS (rustls) ─────────────────────────
 
 #[derive(Debug)]
-struct NoVerify(Arc<rustls::crypto::CryptoProvider>);
+pub struct NoVerify(Arc<rustls::crypto::CryptoProvider>);
+
+/// Проверка сертификата отключена (allowInsecure).
+pub type NoVerifyPub = NoVerify;
+
+impl NoVerify {
+    pub fn new(p: Arc<rustls::crypto::CryptoProvider>) -> Self {
+        Self(p)
+    }
+}
 
 impl rustls::client::danger::ServerCertVerifier for NoVerify {
     fn verify_server_cert(

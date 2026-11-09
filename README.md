@@ -17,7 +17,10 @@ VPN-клиент для Android в духе **v2rayN / v2rayNG**, полност
 - VMess AEAD (aes-128-gcm, chacha20-poly1305)
 - Trojan
 - Shadowsocks: AEAD и 2022 (`2022-blake3-*`)
-- SOCKS5
+- **Hysteria2** (QUIC, аутентификация по HTTP/3, UDP-датаграммы с фрагментацией, обфускация **Salamander**)
+- **TUIC v5** (QUIC, токен из TLS Keying Material, UDP в режиме native)
+- **AnyTLS** (sing-box)
+- SOCKS5, HTTP/HTTPS-прокси (CONNECT)
 
 **Транспорты:**
 - TCP (raw), в том числе с HTTP-маскировкой (`headerType=http`)
@@ -26,10 +29,10 @@ VPN-клиент для Android в духе **v2rayN / v2rayNG**, полност
 - gRPC — режимы `gun` и `multi`, h2c / TLS / REALITY
 - XHTTP (SplitHTTP) — режимы `auto`, `stream-one`, `stream-up`, `packet-up`, h2c / TLS / REALITY
 
-Все комбинации проверены против Xray-core 26.3 в обе стороны (скачивание и загрузка по 20 МБ). UDP работает через VLESS, VMess, Trojan и Shadowsocks.
+Hysteria2, TUIC и AnyTLS проверены против sing-box 1.14, остальное — против Xray-core 26.3; все комбинации — в обе стороны (скачивание и загрузка по 20 МБ). UDP работает через VLESS, VMess, Trojan и Shadowsocks.
 
 **Как в v2rayNG:**
-- импорт ссылок `vless:// vmess:// trojan:// ss:// socks://` из буфера обмена, экспорт и шаринг;
+- импорт ссылок `vless:// vmess:// trojan:// ss:// hysteria2:// hy2:// tuic:// anytls:// socks:// http(s)://` из буфера обмена, экспорт и шаринг;
 - **подписки**: добавление по URL (или просто скопируйте `https://…` и нажмите «Импорт»), вкладка для каждой подписки, название и остаток трафика/срок из заголовков `profile-title` и `subscription-userinfo`, автообновление раз в сутки;
 - тест реальной задержки для всех серверов, сортировка, удаление дубликатов и недоступных;
 - раздельное туннелирование по приложениям (только выбранные / все, кроме выбранных);
@@ -89,7 +92,7 @@ cargo run -p xd-core --release --example itest -- socks '<ссылка>' 10808  
 
 ## Ограничения
 
-- нет mKCP, QUIC и Hysteria2; XHTTP только поверх HTTP/2 (без HTTP/3 и раздельного `downloadSettings`);
+- нет mKCP и WireGuard; у Hysteria2 нет port hopping и Brutal (используется BBR); UDP через AnyTLS не поддерживается; XHTTP только поверх HTTP/2 (без HTTP/3 и раздельного `downloadSettings`);
 - Vision поверх TLS требует TLS 1.3 на сервере (как и в Xray);
 - нет сканера QR-кодов и Mux.
 

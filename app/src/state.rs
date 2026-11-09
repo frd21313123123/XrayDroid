@@ -242,12 +242,15 @@ pub fn profile_to_form(p: &Profile) -> ProfileForm {
         public_key: p.public_key.clone().into(),
         short_id: p.short_id.clone().into(),
         spider_x: p.spider_x.clone().into(),
+        obfs: if p.obfs == "salamander" { 1 } else { 0 },
+        obfs_password: p.obfs_password.clone().into(),
+        secret: p.secret.clone().into(),
     }
 }
 
 /// Проверка и преобразование формы. Возвращает ошибку для пользователя.
 pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profile, String> {
-    let protocol = Protocol::all()[f.protocol.clamp(0, 4) as usize];
+    let protocol = Protocol::all()[f.protocol.clamp(0, 8) as usize];
     let mut p = base.cloned().unwrap_or_default();
     if p.id.is_empty() {
         p.id = Profile::new_id();
@@ -261,17 +264,17 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     p.port = f.port.trim().parse::<u16>().ok().filter(|p| *p > 0).ok_or("Порт должен быть числом от 1 до 65535")?;
     p.id_or_password = f.uuid.trim().to_string();
     match protocol {
-        Protocol::Vless | Protocol::Vmess => {
+        Protocol::Vless | Protocol::Vmess | Protocol::Tuic => {
             if xd_core::proxy::vless::parse_uuid(&p.id_or_password).is_err() {
                 return Err("Неверный UUID".into());
             }
         }
-        Protocol::Trojan | Protocol::Shadowsocks => {
+        Protocol::Trojan | Protocol::Shadowsocks | Protocol::Hysteria2 | Protocol::AnyTls => {
             if p.id_or_password.is_empty() {
                 return Err("Укажите пароль".into());
             }
         }
-        Protocol::Socks => {}
+        Protocol::Socks | Protocol::Http => {}
     }
     p.username = f.username.trim().to_string();
     p.method = match protocol {
@@ -293,9 +296,20 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
             return Err(e.to_string());
         }
     }
-    let stream = matches!(protocol, Protocol::Vless | Protocol::Vmess | Protocol::Trojan);
+    let stream = protocol.has_transport();
     p.network = if stream { NETWORKS[f.network.clamp(0, 4) as usize].into() } else { "tcp".into() };
-    p.security = if stream { SECURITIES[f.security.clamp(0, 2) as usize].into() } else { "none".into() };
+    p.security = match protocol {
+        _ if stream => SECURITIES[f.security.clamp(0, 2) as usize].into(),
+        Protocol::Hysteria2 | Protocol::Tuic | Protocol::AnyTls => "tls".into(),
+        Protocol::Http => SECURITIES[f.security.clamp(0, 1) as usize].into(),
+        _ => "none".into(),
+    };
+    p.obfs = if protocol == Protocol::Hysteria2 && f.obfs == 1 { "salamander".into() } else { String::new() };
+    p.obfs_password = if p.obfs.is_empty() { String::new() } else { f.obfs_password.to_string() };
+    p.secret = if protocol == Protocol::Tuic { f.secret.to_string() } else { String::new() };
+    if protocol == Protocol::Tuic && p.secret.is_empty() {
+        return Err("Укажите пароль TUIC".into());
+    }
     if p.security == "reality" && protocol != Protocol::Vless {
         return Err("REALITY поддерживается только с VLESS".into());
     }
@@ -332,7 +346,7 @@ pub fn new_form(protocol: i32, allow_insecure: bool) -> ProfileForm {
     let mut f = profile_to_form(&Profile { port: 443, ..Default::default() });
     f.protocol = protocol;
     f.security = match protocol {
-        2 => 1,
+        2 | 5 | 6 | 7 => 1,
         _ => 0,
     };
     f.allow_insecure = allow_insecure;

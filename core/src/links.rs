@@ -68,7 +68,9 @@ fn parse_hostport(s: &str) -> Option<(String, u16)> {
         return Some((h.to_string(), p.trim_end_matches('/').parse().ok()?));
     }
     let (h, p) = s.rsplit_once(':')?;
-    Some((h.to_string(), p.trim_end_matches('/').parse().ok()?))
+    let p = p.trim_end_matches('/');
+    let first = p.split([',', '-']).next().unwrap_or(p);
+    Some((h.to_string(), first.parse().ok()?))
 }
 
 fn fmt_host(h: &str) -> String {
@@ -236,6 +238,66 @@ pub fn parse_link(line: &str) -> Option<Profile> {
                 p.port = port;
             }
         }
+        "hysteria2" | "hy2" => {
+            let u = parse_url(rest)?;
+            let g = |k: &str| u.query.get(k).cloned().unwrap_or_default();
+            p.protocol = Protocol::Hysteria2;
+            p.id_or_password = pct(&u.user);
+            p.address = u.host;
+            p.port = u.port;
+            p.sni = g("sni");
+            p.allow_insecure = matches!(g("insecure").as_str(), "1" | "true");
+            p.obfs = g("obfs");
+            p.obfs_password = g("obfs-password");
+            p.security = "tls".into();
+            p.remarks = u.fragment;
+        }
+        "tuic" => {
+            let u = parse_url(rest)?;
+            let g = |k: &str| u.query.get(k).cloned().unwrap_or_default();
+            p.protocol = Protocol::Tuic;
+            let user = pct(&u.user);
+            let (id, pw) = user.split_once(':').unwrap_or((&user, ""));
+            p.id_or_password = id.to_string();
+            p.secret = pw.to_string();
+            p.address = u.host;
+            p.port = u.port;
+            p.sni = g("sni");
+            p.alpn = g("alpn");
+            p.allow_insecure = matches!(g("allow_insecure").as_str(), "1" | "true") || matches!(g("insecure").as_str(), "1" | "true");
+            p.security = "tls".into();
+            p.remarks = u.fragment;
+        }
+        "anytls" => {
+            let u = parse_url(rest)?;
+            let g = |k: &str| u.query.get(k).cloned().unwrap_or_default();
+            p.protocol = Protocol::AnyTls;
+            p.id_or_password = pct(&u.user);
+            p.address = u.host;
+            p.port = u.port;
+            p.sni = g("sni");
+            p.allow_insecure = matches!(g("insecure").as_str(), "1" | "true") || matches!(g("allowInsecure").as_str(), "1" | "true");
+            p.security = "tls".into();
+            p.remarks = u.fragment;
+        }
+        "http" | "https" => {
+            // только вида scheme://[user:pass@]host:port[/]#имя — ссылки с путём это подписки
+            let (body, _) = rest.split_once('#')?;
+            if body.trim_end_matches('/').contains('/') || body.contains('?') {
+                return None;
+            }
+            let u = parse_url(rest)?;
+            p.protocol = Protocol::Http;
+            p.address = u.host;
+            p.port = u.port;
+            p.remarks = u.fragment;
+            p.security = if scheme.eq_ignore_ascii_case("https") { "tls".into() } else { "none".into() };
+            if !u.user.is_empty() {
+                let (a, b) = u.user.split_once(':').unwrap_or((&u.user, ""));
+                p.username = pct(a);
+                p.id_or_password = pct(b);
+            }
+        }
         "socks" | "socks5" => {
             let u = parse_url(rest)?;
             p.protocol = Protocol::Socks;
@@ -299,6 +361,51 @@ pub fn to_link(p: &Profile) -> String {
             let ui = URL_SAFE_NO_PAD.encode(format!("{}:{}", p.method, p.id_or_password));
             format!("ss://{}@{}:{}#{}", ui, host, p.port, frag)
         }
+        Protocol::Hysteria2 => {
+            let mut q: Vec<(String, String)> = Vec::new();
+            if !p.sni.is_empty() {
+                q.push(("sni".into(), p.sni.clone()));
+            }
+            if p.allow_insecure {
+                q.push(("insecure".into(), "1".into()));
+            }
+            if !p.obfs.is_empty() {
+                q.push(("obfs".into(), p.obfs.clone()));
+                q.push(("obfs-password".into(), p.obfs_password.clone()));
+            }
+            format!("hysteria2://{}@{}:{}/?{}#{}", enc(&p.id_or_password), host, p.port, join_query(&q), frag)
+        }
+        Protocol::Tuic => {
+            let mut q: Vec<(String, String)> = vec![("congestion_control".into(), "bbr".into()), ("udp_relay_mode".into(), "native".into())];
+            if !p.sni.is_empty() {
+                q.push(("sni".into(), p.sni.clone()));
+            }
+            if !p.alpn.is_empty() {
+                q.push(("alpn".into(), p.alpn.clone()));
+            }
+            if p.allow_insecure {
+                q.push(("allow_insecure".into(), "1".into()));
+            }
+            format!("tuic://{}:{}@{}:{}?{}#{}", enc(&p.id_or_password), enc(&p.secret), host, p.port, join_query(&q), frag)
+        }
+        Protocol::AnyTls => {
+            let mut q: Vec<(String, String)> = Vec::new();
+            if !p.sni.is_empty() {
+                q.push(("sni".into(), p.sni.clone()));
+            }
+            if p.allow_insecure {
+                q.push(("insecure".into(), "1".into()));
+            }
+            format!("anytls://{}@{}:{}?{}#{}", enc(&p.id_or_password), host, p.port, join_query(&q), frag)
+        }
+        Protocol::Http => {
+            let scheme = if p.security == "tls" { "https" } else { "http" };
+            if p.username.is_empty() && p.id_or_password.is_empty() {
+                format!("{scheme}://{}:{}#{}", host, p.port, frag)
+            } else {
+                format!("{scheme}://{}:{}@{}:{}#{}", enc(&p.username), enc(&p.id_or_password), host, p.port, frag)
+            }
+        }
         Protocol::Socks => {
             if p.username.is_empty() {
                 format!("socks://{}:{}#{}", host, p.port, frag)
@@ -339,6 +446,22 @@ mod tests {
         let p = parse_link("ss://2022-blake3-aes-128-gcm:abc%3D@[::1]:80#y").unwrap();
         assert_eq!(p.id_or_password, "abc=");
         assert_eq!(p.address, "::1");
+    }
+
+    #[test]
+    fn quic_links() {
+        let p = parse_link("hy2://pa%40ss@example.com:443,20000-30000/?sni=a.com&insecure=1&obfs=salamander&obfs-password=xx#h").unwrap();
+        assert_eq!(p.protocol, Protocol::Hysteria2);
+        assert_eq!(p.port, 443);
+        assert_eq!(p.id_or_password, "pa@ss");
+        assert_eq!(p.obfs_password, "xx");
+        let p2 = parse_link(&to_link(&p)).unwrap();
+        assert_eq!(p2.obfs, "salamander");
+        let t = parse_link("tuic://0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a:secret@1.2.3.4:443?alpn=h3&sni=x.com#t").unwrap();
+        assert_eq!(t.secret, "secret");
+        assert_eq!(parse_link(&to_link(&t)).unwrap().secret, "secret");
+        let a = parse_link("anytls://pw@a.com:443?sni=b.com#a").unwrap();
+        assert_eq!(a.protocol, Protocol::AnyTls);
     }
 
     #[test]

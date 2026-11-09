@@ -1,8 +1,13 @@
 //! Исходящие соединения (outbounds).
 
+pub mod anytls;
+pub mod http;
+pub mod hysteria2;
+pub mod quic;
 pub mod shadowsocks;
 pub mod socks;
 pub mod trojan;
+pub mod tuic;
 pub mod vision;
 pub mod vless;
 pub mod vless_enc;
@@ -46,6 +51,10 @@ impl Outbound {
                 Protocol::Trojan => trojan::tcp(p, app, dest).await,
                 Protocol::Shadowsocks => shadowsocks::tcp(p, app, dest).await,
                 Protocol::Socks => socks::tcp(p, app, dest).await,
+                Protocol::Hysteria2 => hysteria2::tcp(p, app, dest).await,
+                Protocol::Tuic => tuic::tcp(p, app, dest).await,
+                Protocol::AnyTls => anytls::tcp(p, app, dest).await,
+                Protocol::Http => http::tcp(p, app, dest).await,
             },
         }
     }
@@ -61,6 +70,10 @@ impl Outbound {
                 Protocol::Trojan => trojan::udp(p, app, dest).await,
                 Protocol::Shadowsocks => shadowsocks::udp(p, app, dest).await,
                 Protocol::Socks => Err(io_err("UDP через SOCKS не поддерживается")),
+                Protocol::Hysteria2 => hysteria2::udp(p, app, dest).await,
+                Protocol::Tuic => tuic::udp(p, app, dest).await,
+                Protocol::AnyTls => Err(io_err("UDP через AnyTLS не поддерживается")),
+                Protocol::Http => Err(io_err("UDP через HTTP-прокси невозможен")),
             },
         }
     }

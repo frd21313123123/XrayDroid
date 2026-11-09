@@ -62,6 +62,9 @@ export struct ProfileForm {
     public-key: string,
     short-id: string,
     spider-x: string,
+    obfs: int,
+    obfs-password: string,
+    secret: string,
 }
 
 export struct RuleForm {
@@ -572,7 +575,7 @@ export component MainWindow inherits Window {
             if root.page == "edit": VerticalLayout {
                 TopBar {
                     title: root.form-is-new ? "Новый сервер" : "Сервер";
-                    subtitle: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS"][root.form.protocol];
+                    subtitle: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP"][root.form.protocol];
                     back => { root.open-page("main"); }
                     IconButton {
                         icon: "check";
@@ -587,14 +590,14 @@ export component MainWindow inherits Window {
                         SectionTitle { text: "ОСНОВНОЕ"; }
                         Choice {
                             label: "Протокол";
-                            model: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS"];
+                            model: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP"];
                             current-index: root.form.protocol;
                             selected(i) => { root.form.protocol = i; root.form-protocol-changed(i); }
                         }
                         Field { label: "Название"; text: root.form.remarks; edited(t) => { root.form.remarks = t; } }
                         Field { label: "Адрес"; placeholder: "example.com или IP"; text: root.form.address; edited(t) => { root.form.address = t; } }
                         Field { label: "Порт"; input-type: InputType.number; text: root.form.port; edited(t) => { root.form.port = t; } }
-                        if root.form.protocol <= 1: Field {
+                        if root.form.protocol <= 1 || root.form.protocol == 6: Field {
                             label: "UUID (id)";
                             text: root.form.uuid;
                             edited(t) => { root.form.uuid = t; }
@@ -632,15 +635,31 @@ export component MainWindow inherits Window {
                                 root.form.method = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"][i];
                             }
                         }
-                        if root.form.protocol == 4: Field {
+                        if root.form.protocol == 4 || root.form.protocol == 8: Field {
                             label: "Логин (необязательно)";
                             text: root.form.username;
                             edited(t) => { root.form.username = t; }
                         }
-                        if root.form.protocol >= 2: Field {
+                        if root.form.protocol >= 2 && root.form.protocol != 6: Field {
                             label: "Пароль";
                             text: root.form.uuid;
                             edited(t) => { root.form.uuid = t; }
+                        }
+                        if root.form.protocol == 6: Field {
+                            label: "Пароль";
+                            text: root.form.secret;
+                            edited(t) => { root.form.secret = t; }
+                        }
+                        if root.form.protocol == 5: Choice {
+                            label: "Обфускация (obfs)";
+                            model: ["нет", "salamander"];
+                            current-index: root.form.obfs;
+                            selected(i) => { root.form.obfs = i; }
+                        }
+                        if root.form.protocol == 5 && root.form.obfs == 1: Field {
+                            label: "Пароль обфускации";
+                            text: root.form.obfs-password;
+                            edited(t) => { root.form.obfs-password = t; }
                         }
 
                         if root.form.protocol <= 2: SectionTitle { text: "ТРАНСПОРТ"; }
@@ -678,14 +697,20 @@ export component MainWindow inherits Window {
                             text: root.form.path;
                             edited(t) => { root.form.path = t; }
                         }
-                        if root.form.protocol <= 2: SectionTitle { text: "БЕЗОПАСНОСТЬ"; }
+                        if root.form.protocol <= 2 || root.form.protocol >= 5: SectionTitle { text: "БЕЗОПАСНОСТЬ"; }
+                        if root.form.protocol == 8: Choice {
+                            label: "Подключение к прокси";
+                            model: ["HTTP", "HTTPS (TLS)"];
+                            current-index: root.form.security == 0 ? 0 : 1;
+                            selected(i) => { root.form.security = i; }
+                        }
                         if root.form.protocol <= 2: Choice {
                             label: "Security";
                             model: ["none", "tls", "reality"];
                             current-index: root.form.security;
                             selected(i) => { root.form.security = i; }
                         }
-                        if root.form.protocol <= 2 && root.form.security != 0: Field {
+                        if (root.form.protocol <= 2 && root.form.security != 0) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): Field {
                             label: "SNI (serverName)";
                             text: root.form.sni;
                             edited(t) => { root.form.sni = t; }
@@ -696,13 +721,13 @@ export component MainWindow inherits Window {
                             text: root.form.fingerprint;
                             edited(t) => { root.form.fingerprint = t; }
                         }
-                        if root.form.protocol <= 2 && root.form.security != 0: Field {
+                        if (root.form.protocol <= 2 && root.form.security != 0) || root.form.protocol == 6 || root.form.protocol == 7: Field {
                             label: "ALPN";
                             placeholder: "h2,http/1.1";
                             text: root.form.alpn;
                             edited(t) => { root.form.alpn = t; }
                         }
-                        if root.form.protocol <= 2 && root.form.security == 1: Toggle {
+                        if (root.form.protocol <= 2 && root.form.security == 1) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): Toggle {
                             text: "Разрешить небезопасный сертификат";
                             hint: "allowInsecure — отключает проверку сертификата";
                             checked: root.form.allow-insecure;
@@ -1194,7 +1219,7 @@ export component MainWindow inherits Window {
                                 padding: 14px;
                                 spacing: 6px;
                                 SectionTitle { text: "ПОДДЕРЖИВАЕТСЯ"; }
-                                Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (XTLS Vision, VLESS Encryption, XUDP), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), SOCKS5"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (XTLS Vision, VLESS Encryption, XUDP), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), Hysteria2 (+Salamander), TUIC v5, AnyTLS, SOCKS5, HTTP(S)"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• TCP (+HTTP-маскировка), TLS, REALITY, WebSocket, HTTPUpgrade, gRPC, XHTTP"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Маршрутизация: домены, IP, geosite/geoip, порты, протоколы"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Подписки, тест задержки, FakeDNS, раздельное туннелирование"; }
@@ -1235,6 +1260,10 @@ export component MainWindow inherits Window {
                 MenuItem { text: "Новый Trojan"; clicked => { root.add-manual(2); } }
                 MenuItem { text: "Новый Shadowsocks"; clicked => { root.add-manual(3); } }
                 MenuItem { text: "Новый SOCKS"; clicked => { root.add-manual(4); } }
+                MenuItem { text: "Новый Hysteria2"; clicked => { root.add-manual(5); } }
+                MenuItem { text: "Новый TUIC"; clicked => { root.add-manual(6); } }
+                MenuItem { text: "Новый AnyTLS"; clicked => { root.add-manual(7); } }
+                MenuItem { text: "Новый HTTP-прокси"; clicked => { root.add-manual(8); } }
             }
         }
     }
