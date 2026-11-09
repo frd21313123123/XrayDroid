@@ -4,9 +4,10 @@ pub mod device;
 pub mod dns;
 pub mod sniff;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,59 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::common::{Address, BoxStream, CountingStream, Network, PrefixedStream, Stats};
 use crate::config::{OutboundTag, Settings};
 use crate::proxy::Outbound;
-use crate::route::{Decision, Meta, Router};
+use crate::route::{Decision, DomainSet, Meta, Router};
+
+/// Возможности платформы, нужные ядру (на Android — через JNI).
+pub trait PlatformHooks: Send + Sync {
+    /// UID приложения-владельца соединения (Android 10+: getConnectionOwnerUid).
+    fn owner_uid(&self, tcp: bool, src: SocketAddr, dst: SocketAddr) -> Option<u32>;
+    /// UID установленного приложения по имени пакета.
+    fn package_uid(&self, package: &str) -> Option<u32>;
+}
+
+/// Маршрут на отдельный сервер в рабочем виде.
+pub struct SplitRt {
+    pub id: String,
+    pub name: String,
+    /// None — сервер удалён
+    pub outbound: Option<Outbound>,
+    pub fallback_main: bool,
+    /// appId (uid % 100000) выбранных приложений
+    pub app_ids: HashSet<u32>,
+    pub domains: Option<DomainSet>,
+    up: AtomicBool,
+}
+
+impl SplitRt {
+    pub fn new(
+        id: String,
+        name: String,
+        outbound: Option<Outbound>,
+        fallback_main: bool,
+        app_ids: HashSet<u32>,
+        domains: Option<DomainSet>,
+    ) -> Self {
+        let up = AtomicBool::new(outbound.is_some());
+        Self { id, name, outbound, fallback_main, app_ids, domains, up }
+    }
+    /// Сервер отвечает (проверяется в фоне).
+    pub fn is_up(&self) -> bool {
+        self.outbound.is_some() && self.up.load(Ordering::Relaxed)
+    }
+    pub fn set_up(&self, v: bool) {
+        self.up.store(v, Ordering::Relaxed);
+    }
+}
+
+/// Что делать с соединением, подпавшим под маршрут на отдельный сервер.
+pub enum SplitDecision<'a> {
+    /// Идём через сервер маршрута
+    Via(&'a SplitRt),
+    /// Сервер недоступен и включён запасной путь — обычные правила
+    Fallback,
+    /// Сервер недоступен — не пускаем (без утечек)
+    Block(&'a SplitRt),
+}
 
 /// Общий контекст работающего ядра.
 pub struct Ctx {
@@ -25,12 +78,57 @@ pub struct Ctx {
     pub fake: dns::FakeDns,
     pub settings: Settings,
     pub stats: Arc<Stats>,
+    /// Маршруты на отдельные серверы — проверяются раньше обычных правил
+    pub splits: Vec<SplitRt>,
+    pub hooks: Option<Arc<dyn PlatformHooks>>,
     dns_cache: Mutex<HashMap<String, (IpAddr, Instant)>>,
 }
 
 impl Ctx {
     pub fn new(router: Router, proxy: Outbound, settings: Settings, stats: Arc<Stats>) -> Self {
-        Self { router, proxy, fake: dns::FakeDns::new(), settings, stats, dns_cache: Mutex::new(HashMap::new()) }
+        Self {
+            router,
+            proxy,
+            fake: dns::FakeDns::new(),
+            settings,
+            stats,
+            splits: Vec::new(),
+            hooks: None,
+            dns_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Какой маршрут на отдельный сервер подходит соединению (если есть).
+    pub fn match_split(&self, uid: Option<u32>, domain: Option<&str>, ip: Option<IpAddr>) -> Option<SplitDecision<'_>> {
+        let by_app_ok = !ip.map(crate::common::is_private_ip).unwrap_or(false);
+        let sp = self.splits.iter().find(|sp| {
+            (by_app_ok && uid.map(|u| sp.app_ids.contains(&(u % 100_000))).unwrap_or(false))
+                || matches!((domain, &sp.domains), (Some(d), Some(set)) if set.matches(d))
+        })?;
+        Some(if sp.is_up() {
+            SplitDecision::Via(sp)
+        } else if sp.fallback_main {
+            SplitDecision::Fallback
+        } else {
+            SplitDecision::Block(sp)
+        })
+    }
+
+    fn has_app_splits(&self) -> bool {
+        self.hooks.is_some() && self.splits.iter().any(|s| !s.app_ids.is_empty())
+    }
+
+    /// UID владельца соединения; только для потоков из TUN.
+    fn owner_uid(&self, tcp: bool, src: &str, dst: &Address) -> Option<u32> {
+        if !self.has_app_splits() {
+            return None;
+        }
+        let src: SocketAddr = src.parse().ok()?;
+        if src.ip().is_loopback() {
+            return None;
+        }
+        let dst = SocketAddr::new(dst.ip()?, dst.port);
+        self.hooks.as_ref()?.owner_uid(tcp, src, dst)
     }
 
     async fn resolve(&self, domain: &str) -> Option<IpAddr> {
@@ -87,6 +185,7 @@ impl Ctx {
 
     /// Обработка TCP-соединения: dest — исходный адрес назначения.
     pub async fn handle_tcp(self: Arc<Self>, src: String, mut app: BoxStream, mut dest: Address) {
+        let uid = self.owner_uid(true, &src, &dest);
         let mut domain: Option<String> = dest.domain().map(|s| s.to_string());
         if let Some(ip) = dest.ip() {
             if dns::is_fake(ip) {
@@ -116,13 +215,24 @@ impl Ctx {
                 app = Box::new(PrefixedStream::new(buf, app));
             }
         }
-        let (tag, rule) = self.decide(domain.as_deref(), dest.ip(), dest.port, Network::Tcp, proto).await;
         let shown = match (&domain, dest.domain()) {
             (Some(d), None) => format!("{dest} ({d})"),
             _ => dest.to_string(),
         };
+        let (tag, ob, rule) = match self.match_split(uid, domain.as_deref(), dest.ip()) {
+            Some(SplitDecision::Via(sp)) => {
+                (OutboundTag::Proxy, sp.outbound.clone().unwrap_or(Outbound::Block), format!("отдельный сервер «{}»", sp.name))
+            }
+            Some(SplitDecision::Block(sp)) => {
+                log::info!("tcp {src} → {shown} [block] ← сервер «{}» недоступен", sp.name);
+                return;
+            }
+            _ => {
+                let (tag, rule) = self.decide(domain.as_deref(), dest.ip(), dest.port, Network::Tcp, proto).await;
+                (tag, self.outbound(tag), rule)
+            }
+        };
         log::info!("tcp {src} → {shown} [{}] ← {rule}", tag.label());
-        let ob = self.outbound(tag);
         let app: BoxStream = if tag == OutboundTag::Proxy { Box::new(CountingStream::new(app, self.stats.clone())) } else { app };
         if let Err(e) = ob.handle_tcp(app, &dest).await {
             log::warn!("tcp {shown} [{}]: {e}", tag.label());
@@ -130,6 +240,7 @@ impl Ctx {
     }
 
     pub async fn handle_udp(self: Arc<Self>, src: String, mut app: BoxStream, mut dest: Address) {
+        let uid = if dest.port == 53 { None } else { self.owner_uid(false, &src, &dest) };
         if dest.port == 53 {
             if self.settings.fake_dns {
                 self.serve_dns(app).await;
@@ -152,9 +263,20 @@ impl Ctx {
         if self.settings.block_quic && dest.port == 443 {
             return;
         }
-        let (tag, rule) = self.decide(domain.as_deref(), dest.ip(), dest.port, Network::Udp, None).await;
+        let (tag, ob, rule) = match self.match_split(uid, domain.as_deref(), dest.ip()) {
+            Some(SplitDecision::Via(sp)) => {
+                (OutboundTag::Proxy, sp.outbound.clone().unwrap_or(Outbound::Block), format!("отдельный сервер «{}»", sp.name))
+            }
+            Some(SplitDecision::Block(sp)) => {
+                log::info!("udp {src} → {dest} [block] ← сервер «{}» недоступен", sp.name);
+                return;
+            }
+            _ => {
+                let (tag, rule) = self.decide(domain.as_deref(), dest.ip(), dest.port, Network::Udp, None).await;
+                (tag, self.outbound(tag), rule)
+            }
+        };
         log::info!("udp {src} → {dest} [{}] ← {rule}", tag.label());
-        let ob = self.outbound(tag);
         if tag == OutboundTag::Proxy {
             app = Box::new(CountingStream::new(app, self.stats.clone()));
         }
@@ -262,5 +384,77 @@ pub async fn run_socks(ctx: Arc<Ctx>, listen: SocketAddr) -> io::Result<()> {
                 log::debug!("socks {peer}: {e}");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Profile, RoutingConfig};
+    use std::path::Path;
+
+    struct Hooks;
+    impl PlatformHooks for Hooks {
+        fn owner_uid(&self, _tcp: bool, src: SocketAddr, _dst: SocketAddr) -> Option<u32> {
+            // порт источника 40000 — приложение с appId 10123 (второй пользователь профиля)
+            (src.port() == 40000).then_some(10 * 100_000 + 10123)
+        }
+        fn package_uid(&self, package: &str) -> Option<u32> {
+            (package == "com.openai.chatgpt").then_some(10123)
+        }
+    }
+
+    fn ctx(fallback_main: bool) -> Ctx {
+        let proxy = Outbound::Proxy(Arc::new(Profile { id: "main".into(), ..Default::default() }));
+        let mut c = Ctx::new(Router::new(&RoutingConfig::default(), Path::new("/nonexistent")), proxy, Settings::default(), Arc::new(Stats::default()));
+        let sets = crate::route::compile_domain_sets(&[&["domain:openai.com".to_string(), "keyword:gemini".to_string()]], Path::new("/nonexistent"));
+        let dm = sets.into_iter().next();
+        let server = Outbound::Proxy(Arc::new(Profile { id: "us".into(), ..Default::default() }));
+        c.splits.push(SplitRt::new("s1".into(), "Нейросети".into(), Some(server), fallback_main, HashSet::from([10123]), dm));
+        c.hooks = Some(Arc::new(Hooks));
+        c
+    }
+
+    fn kind(d: Option<SplitDecision>) -> &'static str {
+        match d {
+            None => "none",
+            Some(SplitDecision::Via(_)) => "via",
+            Some(SplitDecision::Fallback) => "fallback",
+            Some(SplitDecision::Block(_)) => "block",
+        }
+    }
+
+    #[test]
+    fn split_by_domain_and_app() {
+        let c = ctx(false);
+        assert_eq!(kind(c.match_split(None, Some("chat.openai.com"), None)), "via");
+        assert_eq!(kind(c.match_split(None, Some("gemini.google.com"), None)), "via");
+        assert_eq!(kind(c.match_split(None, Some("example.com"), None)), "none");
+        // приложение из другого профиля пользователя — сравниваем по appId
+        assert_eq!(kind(c.match_split(Some(10 * 100_000 + 10123), Some("example.com"), None)), "via");
+        assert_eq!(kind(c.match_split(Some(10124), Some("example.com"), None)), "none");
+        // локальная сеть из приложения идёт по обычным правилам
+        assert_eq!(kind(c.match_split(Some(10123), None, Some("192.168.1.10".parse().unwrap()))), "none");
+        assert_eq!(kind(c.match_split(Some(10123), None, Some("8.8.8.8".parse().unwrap()))), "via");
+    }
+
+    #[test]
+    fn split_server_down() {
+        let c = ctx(false);
+        c.splits[0].set_up(false);
+        assert_eq!(kind(c.match_split(None, Some("openai.com"), None)), "block");
+        let c = ctx(true);
+        c.splits[0].set_up(false);
+        assert_eq!(kind(c.match_split(None, Some("openai.com"), None)), "fallback");
+    }
+
+    #[test]
+    fn owner_uid_lookup() {
+        let c = ctx(false);
+        let dst = Address::from_socket("1.2.3.4:443".parse().unwrap());
+        assert_eq!(c.owner_uid(true, "10.0.0.2:40000", &dst), Some(10 * 100_000 + 10123));
+        assert_eq!(c.owner_uid(true, "10.0.0.2:40001", &dst), None);
+        // SOCKS-вход (loopback) не опрашиваем
+        assert_eq!(c.owner_uid(true, "127.0.0.1:40000", &dst), None);
     }
 }

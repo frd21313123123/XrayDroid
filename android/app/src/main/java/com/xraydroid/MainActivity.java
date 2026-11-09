@@ -35,7 +35,7 @@ public class MainActivity extends NativeActivity {
             public void onReceive(Context c, Intent i) {
                 XrayCore.nativeOnStatus(i.getBooleanExtra("running", false),
                         String.valueOf(i.getStringExtra("error") == null ? "" : i.getStringExtra("error")),
-                        i.getLongExtra("up", 0), i.getLongExtra("down", 0));
+                        i.getLongExtra("up", 0), i.getLongExtra("down", 0), i.getLongExtra("started", 0));
             }
         };
         IntentFilter f = new IntentFilter(XrayVpnService.ACTION_STATUS);
@@ -96,7 +96,7 @@ public class MainActivity extends NativeActivity {
             try {
                 startService(i);
             } catch (Exception e) {
-                XrayCore.nativeOnStatus(false, "", 0, 0);
+                XrayCore.nativeOnStatus(false, "", 0, 0, 0);
             }
         });
     }
@@ -113,7 +113,7 @@ public class MainActivity extends NativeActivity {
             if (resultCode == RESULT_OK) {
                 startVpnService();
             } else {
-                XrayCore.nativeOnStatus(false, "не выдано разрешение на VPN", 0, 0);
+                XrayCore.nativeOnStatus(false, "не выдано разрешение на VPN", 0, 0, 0);
             }
         }
     }

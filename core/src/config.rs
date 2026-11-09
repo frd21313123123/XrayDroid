@@ -138,6 +138,10 @@ pub struct Subscription {
     pub last_update: i64,
     /// Трафик/срок из заголовка subscription-userinfo
     pub info: String,
+    /// Использовано / всего, байт (0 — неизвестно) и срок действия (unix, 0 — бессрочно)
+    pub used: u64,
+    pub total: u64,
+    pub expire: i64,
     /// Название задано пользователем (не перезаписывать profile-title)
     pub custom_name: bool,
 }
@@ -221,6 +225,25 @@ impl RoutingRule {
     }
 }
 
+/// Маршрут на отдельный сервер: трафик выбранных приложений и сайтов идёт
+/// через указанный сервер, а не через основной. Проверяется раньше обычных правил.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct SplitRoute {
+    pub id: String,
+    pub remarks: String,
+    pub enabled: bool,
+    /// id профиля-сервера
+    pub server: String,
+    /// Пакеты приложений (Android 10+)
+    pub apps: Vec<String>,
+    /// Сайты: domain:, full:, keyword:, regexp:, geosite:
+    pub domain: Vec<String>,
+    /// Сервер недоступен: true — трафик идёт по обычным правилам (через основной сервер),
+    /// false — блокируется, чтобы ничего не утекло.
+    pub fallback_main: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RoutingConfig {
@@ -267,6 +290,8 @@ pub struct Settings {
     pub test_url: String,
     pub sub_user_agent: String,
     pub allow_insecure_default: bool,
+    /// Обновлять подписки раз в сутки
+    pub sub_auto_update: bool,
 }
 
 impl Default for Settings {
@@ -285,6 +310,7 @@ impl Default for Settings {
             test_url: "http://www.gstatic.com/generate_204".into(),
             sub_user_agent: "v2rayNG/1.10.0".into(),
             allow_insecure_default: false,
+            sub_auto_update: true,
         }
     }
 }
@@ -296,6 +322,8 @@ pub struct AppConfig {
     pub selected: String,
     pub subscriptions: Vec<Subscription>,
     pub routing: RoutingConfig,
+    /// Маршруты на отдельные серверы
+    pub splits: Vec<SplitRoute>,
     pub settings: Settings,
 }
 

@@ -10,6 +10,8 @@ pub struct VpnStatus {
     pub message: String,
     pub up: u64,
     pub down: u64,
+    /// Время запуска VPN, unix мс (0 — неизвестно)
+    pub started_ms: i64,
 }
 
 static STATUS: Mutex<VpnStatus> = Mutex::new(VpnStatus {
@@ -19,6 +21,7 @@ static STATUS: Mutex<VpnStatus> = Mutex::new(VpnStatus {
     message: String::new(),
     up: 0,
     down: 0,
+    started_ms: 0,
 });
 
 pub fn get() -> VpnStatus {
@@ -43,7 +46,7 @@ pub fn set_message(m: &str) {
 }
 
 /// Сообщение от сервиса.
-pub fn on_service(running: bool, error: &str, up: u64, down: u64) {
+pub fn on_service(running: bool, error: &str, up: u64, down: u64, started_ms: i64) {
     let mut s = STATUS.lock();
     if s.running != running || !error.is_empty() {
         s.message.clear();
@@ -53,4 +56,5 @@ pub fn on_service(running: bool, error: &str, up: u64, down: u64) {
     s.error = error.to_string();
     s.up = up;
     s.down = down;
+    s.started_ms = started_ms;
 }

@@ -185,6 +185,82 @@ pub fn parse_cidr(s: &str) -> Option<(IpAddr, u8)> {
     }
 }
 
+/// Компилирует список доменных условий (`domain:`, `full:`, `keyword:`, `regexp:`, `geosite:`).
+fn compile_domains(list: &[String], sites: &HashMap<String, Vec<geo::GeoDomain>>) -> DomainMatcher {
+    let mut dm = DomainMatcher::default();
+    for d in list {
+        let d = d.trim();
+        if d.is_empty() || d.starts_with('#') {
+            continue;
+        }
+        if let Some(code) = d.strip_prefix("geosite:") {
+            let (code, attr) = match code.split_once('@') {
+                Some((c, a)) => (c.to_ascii_lowercase(), Some(a.to_ascii_lowercase())),
+                None => (code.to_ascii_lowercase(), None),
+            };
+            if let Some(list) = sites.get(&code) {
+                for gd in list {
+                    if let Some(a) = &attr {
+                        if !gd.attrs.contains(a) {
+                            continue;
+                        }
+                    }
+                    dm.add(gd.kind, &gd.value);
+                }
+            }
+        } else if let Some(v) = d.strip_prefix("domain:") {
+            dm.add(2, v);
+        } else if let Some(v) = d.strip_prefix("full:") {
+            dm.add(3, v);
+        } else if let Some(v) = d.strip_prefix("keyword:") {
+            dm.add(0, v);
+        } else if let Some(v) = d.strip_prefix("regexp:") {
+            dm.add(1, v);
+        } else if let Some(v) = d.strip_prefix("dotless:") {
+            dm.add(1, &format!("^[^.]*{}[^.]*$", regex::escape(v)));
+        } else {
+            dm.add(0, d);
+        }
+    }
+    dm
+}
+
+/// Коды geosite, упомянутые в списке доменных условий.
+fn geosite_codes<'a>(list: impl IntoIterator<Item = &'a String>, out: &mut HashSet<String>) {
+    for d in list {
+        if let Some(c) = d.trim().strip_prefix("geosite:") {
+            out.insert(c.split('@').next().unwrap_or("").to_ascii_lowercase());
+        }
+    }
+}
+
+/// Набор доменных условий одного маршрута на отдельный сервер.
+pub struct DomainSet(DomainMatcher);
+
+impl DomainSet {
+    pub fn matches(&self, domain: &str) -> bool {
+        self.0.matches(domain)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Компилирует несколько списков доменов разом (geosite.dat читается один раз).
+pub fn compile_domain_sets(lists: &[&[String]], geo_dir: &Path) -> Vec<DomainSet> {
+    let mut codes = HashSet::new();
+    for l in lists {
+        geosite_codes(l.iter(), &mut codes);
+    }
+    let sites = if codes.is_empty() { HashMap::new() } else { geo::load_geosite(&geo_dir.join("geosite.dat"), &codes) };
+    for c in &codes {
+        if !sites.contains_key(c) {
+            log::warn!("geosite:{c} не найден (скачайте geo-файлы в разделе «Маршруты»)");
+        }
+    }
+    lists.iter().map(|l| DomainSet(compile_domains(l, &sites))).collect()
+}
+
 struct CompiledRule {
     tag: OutboundTag,
     name: String,
@@ -246,11 +322,7 @@ impl Router {
         let mut site_codes = HashSet::new();
         let mut ip_codes = HashSet::new();
         for r in &enabled {
-            for d in &r.domain {
-                if let Some(c) = d.trim().strip_prefix("geosite:") {
-                    site_codes.insert(c.split('@').next().unwrap_or("").to_ascii_lowercase());
-                }
-            }
+            geosite_codes(&r.domain, &mut site_codes);
             for i in &r.ip {
                 if let Some(c) = i.trim().trim_start_matches('!').strip_prefix("geoip:") {
                     let c = c.trim_start_matches('!').to_ascii_lowercase();
@@ -266,53 +338,19 @@ impl Router {
         let geoips = if ip_codes.is_empty() { HashMap::new() } else { geo::load_geoip(&geoip_path, &ip_codes) };
         for c in &site_codes {
             if !sites.contains_key(c) {
-                log::warn!("geosite:{c} не найден (скачайте geo-файлы в разделе «Маршрутизация»)");
+                log::warn!("geosite:{c} не найден (скачайте geo-файлы в разделе «Маршруты»)");
             }
         }
         for c in &ip_codes {
             if !geoips.contains_key(c) {
-                log::warn!("geoip:{c} не найден (скачайте geo-файлы в разделе «Маршрутизация»)");
+                log::warn!("geoip:{c} не найден (скачайте geo-файлы в разделе «Маршруты»)");
             }
         }
 
         let mut rules = Vec::new();
         let mut has_ip_rules = false;
         for r in enabled {
-            let mut dm = DomainMatcher::default();
-            for d in &r.domain {
-                let d = d.trim();
-                if d.is_empty() || d.starts_with('#') {
-                    continue;
-                }
-                if let Some(code) = d.strip_prefix("geosite:") {
-                    let (code, attr) = match code.split_once('@') {
-                        Some((c, a)) => (c.to_ascii_lowercase(), Some(a.to_ascii_lowercase())),
-                        None => (code.to_ascii_lowercase(), None),
-                    };
-                    if let Some(list) = sites.get(&code) {
-                        for gd in list {
-                            if let Some(a) = &attr {
-                                if !gd.attrs.contains(a) {
-                                    continue;
-                                }
-                            }
-                            dm.add(gd.kind, &gd.value);
-                        }
-                    }
-                } else if let Some(v) = d.strip_prefix("domain:") {
-                    dm.add(2, v);
-                } else if let Some(v) = d.strip_prefix("full:") {
-                    dm.add(3, v);
-                } else if let Some(v) = d.strip_prefix("keyword:") {
-                    dm.add(0, v);
-                } else if let Some(v) = d.strip_prefix("regexp:") {
-                    dm.add(1, v);
-                } else if let Some(v) = d.strip_prefix("dotless:") {
-                    dm.add(1, &format!("^[^.]*{}[^.]*$", regex::escape(v)));
-                } else {
-                    dm.add(0, d);
-                }
-            }
+            let dm = compile_domains(&r.domain, &sites);
             let mut im = IpMatcher::default();
             for i in &r.ip {
                 let i = i.trim();

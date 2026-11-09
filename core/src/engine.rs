@@ -13,7 +13,7 @@ use crate::common::{io_err, Address, Stats};
 use crate::config::{AppConfig, Profile};
 use crate::proxy::Outbound;
 use crate::route::Router;
-use crate::tun::{self, Ctx};
+use crate::tun::{self, Ctx, PlatformHooks, SplitRt};
 
 struct Running {
     rt: tokio::runtime::Runtime,
@@ -23,6 +23,64 @@ struct Running {
 }
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+static HOOKS: OnceLock<Arc<dyn PlatformHooks>> = OnceLock::new();
+
+/// Регистрирует возможности платформы (определение приложения по соединению). Один раз на процесс.
+pub fn set_platform_hooks(h: Arc<dyn PlatformHooks>) {
+    let _ = HOOKS.set(h);
+}
+
+/// Собирает маршруты на отдельные серверы из настроек.
+pub fn build_splits(cfg: &AppConfig, geo_dir: &Path, hooks: Option<&Arc<dyn PlatformHooks>>) -> Vec<SplitRt> {
+    let list: Vec<&crate::config::SplitRoute> = cfg.splits.iter().filter(|s| s.enabled).collect();
+    let lists: Vec<&[String]> = list.iter().map(|s| s.domain.as_slice()).collect();
+    let mut sets = crate::route::compile_domain_sets(&lists, geo_dir).into_iter();
+    list.iter()
+        .map(|sp| {
+            let domains = sets.next().filter(|d| !d.is_empty());
+            let outbound = cfg.profiles.iter().find(|p| p.id == sp.server).map(|p| Outbound::Proxy(Arc::new(p.clone())));
+            if outbound.is_none() {
+                log::warn!("маршрут «{}»: сервер не найден", sp.remarks);
+            }
+            let mut app_ids = std::collections::HashSet::new();
+            for pkg in &sp.apps {
+                match hooks.and_then(|h| h.package_uid(pkg)) {
+                    Some(uid) => {
+                        app_ids.insert(uid % 100_000);
+                    }
+                    None => log::warn!("маршрут «{}»: не найдено приложение {pkg}", sp.remarks),
+                }
+            }
+            let name = if sp.remarks.trim().is_empty() { "без названия".to_string() } else { sp.remarks.clone() };
+            SplitRt::new(sp.id.clone(), name, outbound, sp.fallback_main, app_ids, domains)
+        })
+        .collect()
+}
+
+/// Фоновая проверка доступности серверов отдельных маршрутов: два сбоя подряд — «недоступен».
+async fn watch_split(ctx: Arc<Ctx>, idx: usize, profile: Arc<Profile>, url: String) {
+    let mut fails = 0u32;
+    loop {
+        let ok = delay_test(&profile, &url).await.is_ok();
+        let sp = &ctx.splits[idx];
+        if ok {
+            fails = 0;
+            if !sp.is_up() {
+                log::info!("отдельный сервер «{}» снова доступен", sp.name);
+            }
+            sp.set_up(true);
+        } else {
+            fails += 1;
+            if fails >= 2 {
+                if sp.is_up() {
+                    log::warn!("отдельный сервер «{}» недоступен", sp.name);
+                }
+                sp.set_up(false);
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(if ok { 45 } else { 15 })).await;
+    }
+}
 
 /// Общий рантайм для фоновых задач UI (тесты задержки и т.п.).
 pub fn shared_runtime() -> &'static tokio::runtime::Runtime {
@@ -43,13 +101,22 @@ pub fn start(cfg: &AppConfig, geo_dir: &Path, tun_fd: Option<i32>) -> io::Result
     let profile = cfg.selected_profile().cloned().ok_or_else(|| io_err("не выбран сервер"))?;
     let router = Router::new(&cfg.routing, geo_dir);
     let stats = Arc::new(Stats::default());
-    let ctx = Arc::new(Ctx::new(router, Outbound::Proxy(Arc::new(profile.clone())), cfg.settings.clone(), stats.clone()));
+    let hooks = HOOKS.get().cloned();
+    let mut ctx = Ctx::new(router, Outbound::Proxy(Arc::new(profile.clone())), cfg.settings.clone(), stats.clone());
+    ctx.splits = build_splits(cfg, geo_dir, hooks.as_ref());
+    ctx.hooks = hooks;
+    let ctx = Arc::new(ctx);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("xd-core")
         .enable_all()
         .build()?;
     log::info!("Запуск: {} ({}:{}, {})", profile.display_name(), profile.address, profile.port, profile.summary());
+    for (i, sp) in ctx.splits.iter().enumerate() {
+        if let Some(Outbound::Proxy(p)) = &sp.outbound {
+            rt.spawn(watch_split(ctx.clone(), i, p.clone(), cfg.settings.test_url.clone()));
+        }
+    }
     if let Some(fd) = tun_fd {
         let c = ctx.clone();
         let mtu = cfg.settings.mtu;
