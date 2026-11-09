@@ -34,6 +34,8 @@ regex = "1"
 log = "0.4"
 anyhow = "1"
 bytes = "1"
+h2 = "0.4"
+http = "1"
 libc = "0.2"
 parking_lot = "0.12"
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }

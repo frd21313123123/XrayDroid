@@ -641,21 +641,34 @@ export component MainWindow inherits Window {
                             current-index: root.form.network;
                             selected(i) => { root.form.network = i; }
                         }
-                        if root.form.protocol <= 2 && root.form.network != 0: Field {
+                        if root.form.protocol <= 2 && root.form.network == 0: Choice {
+                            label: "Маскировка заголовка (headerType)";
+                            model: ["none", "http"];
+                            current-index: root.form.header-type == "http" ? 1 : 0;
+                            selected(i) => { root.form.header-type = ["", "http"][i]; }
+                        }
+                        if root.form.protocol <= 2 && root.form.network == 3: Choice {
+                            label: "Режим gRPC";
+                            model: ["gun", "multi"];
+                            current-index: root.form.header-type == "multi" ? 1 : 0;
+                            selected(i) => { root.form.header-type = ["gun", "multi"][i]; }
+                        }
+                        if root.form.protocol <= 2 && root.form.network == 4: Choice {
+                            label: "Режим XHTTP";
+                            model: ["auto", "stream-one", "stream-up", "packet-up"];
+                            current-index: root.form.header-type == "stream-one" ? 1 : root.form.header-type == "stream-up" ? 2 : root.form.header-type == "packet-up" ? 3 : 0;
+                            selected(i) => { root.form.header-type = ["auto", "stream-one", "stream-up", "packet-up"][i]; }
+                        }
+                        if root.form.protocol <= 2 && (root.form.network != 0 || root.form.header-type == "http"): Field {
                             label: "Host";
                             text: root.form.host;
                             edited(t) => { root.form.host = t; }
                         }
-                        if root.form.protocol <= 2 && root.form.network != 0: Field {
+                        if root.form.protocol <= 2 && (root.form.network != 0 || root.form.header-type == "http"): Field {
                             label: root.form.network == 3 ? "serviceName" : "Path";
                             text: root.form.path;
                             edited(t) => { root.form.path = t; }
                         }
-                        if root.form.protocol <= 2 && root.form.network >= 3: Hint {
-                            text: "gRPC и XHTTP пока не поддерживаются ядром — профиль сохранится, но подключиться не получится.";
-                            color: Theme.warn;
-                        }
-
                         if root.form.protocol <= 2: SectionTitle { text: "БЕЗОПАСНОСТЬ"; }
                         if root.form.protocol <= 2: Choice {
                             label: "Security";
@@ -1173,7 +1186,7 @@ export component MainWindow inherits Window {
                                 spacing: 6px;
                                 SectionTitle { text: "ПОДДЕРЖИВАЕТСЯ"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• VLESS (+ XTLS Vision), VMess AEAD, Trojan, Shadowsocks (AEAD, 2022), SOCKS5"; }
-                                Text { color: Theme.text; wrap: word-wrap; text: "• TCP, TLS, REALITY, WebSocket, HTTPUpgrade"; }
+                                Text { color: Theme.text; wrap: word-wrap; text: "• TCP (+HTTP-маскировка), TLS, REALITY, WebSocket, HTTPUpgrade, gRPC, XHTTP"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Маршрутизация: домены, IP, geosite/geoip, порты, протоколы"; }
                                 Text { color: Theme.text; wrap: word-wrap; text: "• Подписки, тест задержки, FakeDNS, раздельное туннелирование"; }
                             }

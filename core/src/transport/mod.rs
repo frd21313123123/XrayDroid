@@ -1,5 +1,6 @@
 //! Транспортный уровень: TCP → (TLS | REALITY) → (WebSocket | HTTPUpgrade | raw).
 
+pub mod http2;
 pub mod reality;
 
 use std::collections::HashMap;
@@ -51,10 +52,12 @@ pub fn reality_config(p: &Profile) -> io::Result<reality::RealityConfig> {
 }
 
 pub fn network(p: &Profile) -> &str {
-    if p.network.is_empty() {
-        "tcp"
-    } else {
-        &p.network
+    match p.network.as_str() {
+        "" | "raw" => "tcp",
+        "websocket" => "ws",
+        "splithttp" => "xhttp",
+        "gun" => "grpc",
+        n => n,
     }
 }
 
@@ -62,16 +65,17 @@ pub fn network(p: &Profile) -> &str {
 pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
     let net = network(p);
     match net {
-        "tcp" | "raw" | "ws" | "websocket" | "httpupgrade" => {}
+        "tcp" | "ws" | "httpupgrade" | "grpc" | "xhttp" => {}
         other => return Err(io_err(format!("транспорт «{other}» пока не поддерживается"))),
-    }
-    if net == "tcp" && p.header_type == "http" {
-        return Err(io_err("TCP с HTTP-обфускацией пока не поддерживается"));
     }
     let tcp = connect_tcp(&server_addr(p)).await?;
     let secured: BoxStream = match p.security.as_str() {
         "tls" => {
-            let default_alpn = if net == "ws" || net == "httpupgrade" { "http/1.1" } else { "" };
+            let default_alpn = match net {
+                "ws" | "httpupgrade" => "http/1.1",
+                "grpc" | "xhttp" => "h2",
+                _ => "",
+            };
             let alpn = if p.alpn.is_empty() { default_alpn } else { &p.alpn };
             Box::new(tls_connect(tcp, &sni_of(p), alpn, p.allow_insecure).await?)
         }
@@ -85,8 +89,11 @@ pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
         _ => Box::new(tcp),
     };
     match net {
-        "ws" | "websocket" => websocket(secured, p).await,
+        "ws" => websocket(secured, p).await,
         "httpupgrade" => http_upgrade(secured, p).await,
+        "grpc" => http2::grpc(secured, p).await,
+        "xhttp" => http2::xhttp(secured, p).await,
+        _ if p.header_type == "http" => http2::http_obfs(secured, p).await,
         _ => Ok(secured),
     }
 }

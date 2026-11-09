@@ -283,7 +283,13 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     if p.security == "reality" && protocol != Protocol::Vless {
         return Err("REALITY поддерживается только с VLESS".into());
     }
-    p.header_type = f.header_type.to_string();
+    let ht = f.header_type.to_string();
+    p.header_type = match p.network.as_str() {
+        "tcp" if ht == "http" => ht,
+        "grpc" if ht == "multi" || ht == "gun" => ht,
+        "xhttp" if ["auto", "stream-one", "stream-up", "packet-up"].contains(&ht.as_str()) => ht,
+        _ => String::new(),
+    };
     p.host = f.host.trim().to_string();
     p.path = f.path.trim().to_string();
     p.sni = f.sni.trim().to_string();

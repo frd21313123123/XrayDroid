@@ -82,7 +82,10 @@ fn fmt_host(h: &str) -> String {
 fn apply_stream_query(p: &mut Profile, q: &HashMap<String, String>) {
     let g = |k: &str| q.get(k).cloned().unwrap_or_default();
     p.network = q.get("type").cloned().unwrap_or_else(|| "tcp".into());
-    p.header_type = g("headerType");
+    if p.network == "splithttp" {
+        p.network = "xhttp".into();
+    }
+    p.header_type = if p.network == "grpc" || p.network == "xhttp" { g("mode") } else { g("headerType") };
     p.host = g("host");
     p.path = if p.network == "grpc" { g("serviceName") } else { g("path") };
     p.security = q.get("security").cloned().unwrap_or_else(|| "none".into());
@@ -109,7 +112,11 @@ fn stream_query(p: &Profile) -> Vec<(String, String)> {
         }
     };
     push("flow", &p.flow);
-    push("headerType", &p.header_type);
+    if net == "grpc" || net == "xhttp" {
+        push("mode", &p.header_type);
+    } else {
+        push("headerType", &p.header_type);
+    }
     push("host", &p.host);
     if net == "grpc" {
         push("serviceName", &p.path);

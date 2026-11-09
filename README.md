@@ -15,7 +15,14 @@ VPN-клиент для Android в духе **v2rayN / v2rayNG**, полност
 - Shadowsocks: AEAD и 2022 (`2022-blake3-*`)
 - SOCKS5
 
-**Транспорты:** TCP, TLS, REALITY, WebSocket, HTTPUpgrade. UDP работает через VLESS, VMess, Trojan и Shadowsocks.
+**Транспорты:**
+- TCP (raw), в том числе с HTTP-маскировкой (`headerType=http`)
+- TLS и REALITY
+- WebSocket, HTTPUpgrade
+- gRPC — режимы `gun` и `multi`, h2c / TLS / REALITY
+- XHTTP (SplitHTTP) — режимы `auto`, `stream-one`, `stream-up`, `packet-up`, h2c / TLS / REALITY
+
+Все комбинации проверены против Xray-core 26.3 в обе стороны (скачивание и загрузка по 20 МБ). UDP работает через VLESS, VMess, Trojan и Shadowsocks.
 
 **Как в v2rayNG:**
 - импорт ссылок `vless:// vmess:// trojan:// ss:// socks://` из буфера обмена, экспорт и шаринг;
@@ -78,7 +85,7 @@ cargo run -p xd-core --release --example itest -- socks '<ссылка>' 10808  
 
 ## Ограничения
 
-- транспорты gRPC и XHTTP пока не поддерживаются;
+- нет mKCP, QUIC и Hysteria2; XHTTP только поверх HTTP/2 (без HTTP/3 и раздельного `downloadSettings`);
 - Vision работает только вместе с REALITY (`flow` с обычным TLS не поддерживается);
 - нет сканера QR-кодов и Mux.
 
