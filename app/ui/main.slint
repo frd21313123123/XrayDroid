@@ -394,6 +394,13 @@ export component MainWindow inherits Window {
 
     property <length> kb: self.virtual-keyboard-size.height;
 
+    // заливка под системной строкой состояния
+    Rectangle {
+        y: 0;
+        height: root.safe-area-insets.top;
+        background: Theme.primary;
+    }
+
     keys := FocusScope {
         key-pressed(e) => {
             if (e.text == Key.Back || e.text == Key.Escape) {

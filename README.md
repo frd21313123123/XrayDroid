@@ -1,0 +1,87 @@
+# XrayDroid
+
+VPN-клиент для Android в духе **v2rayN / v2rayNG**, полностью написанный на **Rust**: собственное ядро протоколов и интерфейс на [Slint](https://slint.dev). На Java — только обязательная прослойка Android (`NativeActivity`, `VpnService`, плитка в шторке).
+
+| Главный экран | Маршрутизация | Подписки |
+|---|---|---|
+| ![](docs/2_main_connected.png) | ![](docs/6_routing.png) | ![](docs/8_subs.png) |
+
+## Возможности
+
+**Протоколы** (собственная реализация, проверена против Xray-core 26.3):
+- VLESS, в том числе **REALITY** и **XTLS Vision** (`xtls-rprx-vision`, с переходом в direct-режим)
+- VMess AEAD (aes-128-gcm, chacha20-poly1305)
+- Trojan
+- Shadowsocks: AEAD и 2022 (`2022-blake3-*`)
+- SOCKS5
+
+**Транспорты:** TCP, TLS, REALITY, WebSocket, HTTPUpgrade. UDP работает через VLESS, VMess, Trojan и Shadowsocks.
+
+**Как в v2rayNG:**
+- импорт ссылок `vless:// vmess:// trojan:// ss:// socks://` из буфера обмена, экспорт и шаринг;
+- **подписки**: добавление по URL (или просто скопируйте `https://…` и нажмите «Импорт»), вкладка для каждой подписки, название и остаток трафика/срок из заголовков `profile-title` и `subscription-userinfo`, автообновление раз в сутки;
+- тест реальной задержки для всех серверов, сортировка, удаление дубликатов и недоступных;
+- раздельное туннелирование по приложениям (только выбранные / все, кроме выбранных);
+- локальный SOCKS5-прокси, плитка в шторке быстрых настроек, уведомление со скоростью.
+
+**Маршрутизация** (как в Xray):
+- правила по доменам: `domain:`, `full:`, `keyword:`, `regexp:`, `geosite:категория[@атрибут]`;
+- по IP: адреса и подсети IPv4/IPv6, `geoip:ru`, `geoip:private`, `!geoip:…`;
+- по портам, сети (TCP/UDP) и протоколу из сниффинга (`tls`, `http`);
+- действия: через прокси / напрямую / блокировать; порядок правил, включение/выключение;
+- стратегии `AsIs`, `IPIfNonMatch`, `IPOnDemand`;
+- готовые наборы: «Россия напрямую», «Через прокси только заблокированное в РФ», «Обход локальной сети», «Всё через прокси», «Всё напрямую»;
+- загрузка `geoip.dat`/`geosite.dat` (по умолчанию — [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat)).
+
+**Сеть:** userspace TCP/IP-стек поверх TUN, FakeDNS (домены уходят на сервер, а не резолвятся локально), сниффинг SNI/Host, IPv6, блокировка QUIC по желанию.
+
+## Установка
+
+Готовый APK собирается в GitHub Actions: вкладка **Actions → Android APK → Artifacts**. Для тега `v*` APK прикладывается к релизу.
+
+## Сборка вручную
+
+Нужны: Rust (stable), Android SDK (platform 35, build-tools 35), NDK r27, JDK 17+, `cargo install cargo-ndk`.
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+export ANDROID_HOME=~/Android/Sdk
+GRADLE=./gradlew ./build-android.sh          # все ABI
+TARGETS=arm64-v8a GRADLE=./gradlew ./build-android.sh   # только arm64
+```
+
+APK: `android/app/build/outputs/apk/release/app-release.apk`.
+
+APK подписывается ключом из `android/signing/` — он нужен, чтобы обновления ставились поверх. Для публичного распространения замените его своим (пароли берутся из `XD_STORE_PASSWORD`/`XD_KEY_PASSWORD`).
+
+## Структура
+
+```
+core/      ядро: протоколы, транспорты, TUN, DNS, маршрутизация, подписки
+  src/proxy/      vless, vision, vmess, trojan, shadowsocks, socks
+  src/transport/  tcp/tls/ws/httpupgrade, reality (свой TLS 1.3-клиент)
+  src/route/      правила, geosite/geoip, готовые наборы
+  src/tun/        TUN-устройство, FakeDNS, сниффинг
+  examples/itest.rs  утилита для проверки против настоящего Xray-сервера
+app/       интерфейс на Slint + JNI-мост
+  ui/main.slint   все экраны
+  src/bin/screens.rs  рендер скриншотов интерфейса на ПК без эмулятора
+android/   Gradle-проект: MainActivity, XrayVpnService (процесс :vpn), плитка
+```
+
+## Тесты
+
+```bash
+cargo test -p xd-core
+cargo run -p xd-core --release --example itest -- socks '<ссылка>' 10808   # SOCKS5 через сервер из ссылки
+```
+
+## Ограничения
+
+- транспорты gRPC и XHTTP пока не поддерживаются;
+- Vision работает только вместе с REALITY (`flow` с обычным TLS не поддерживается);
+- нет сканера QR-кодов и Mux.
+
+## Лицензия
+
+GPL-3.0-or-later.

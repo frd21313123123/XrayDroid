@@ -5,4 +5,5 @@
 /android/app/src/main/jniLibs
 /android/local.properties
 *.keystore
+!android/signing/xraydroid.keystore
 *.jks

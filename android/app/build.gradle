@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.xraydroid'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.xraydroid'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+    }
+
+    signingConfigs {
+        release {
+            // Ключ для установки «мимо» магазина. Для публикации замените своим.
+            storeFile file('../signing/xraydroid.keystore')
+            storePassword System.getenv('XD_STORE_PASSWORD') ?: 'xraydroid'
+            keyAlias 'xraydroid'
+            keyPassword System.getenv('XD_KEY_PASSWORD') ?: 'xraydroid'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
