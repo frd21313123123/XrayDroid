@@ -32,7 +32,7 @@ fn frame(cmd: u8, sid: u32, data: &[u8], out: &mut Vec<u8>) {
 pub async fn tcp(p: &Profile, app: BoxStream, dest: &Address) -> io::Result<()> {
     let tcp = transport::connect_tcp(&transport::server_addr(p)).await?;
     let sni = if p.sni.is_empty() { p.address.clone() } else { p.sni.clone() };
-    let tls = transport::tls_connect(tcp, &sni, &p.alpn, p.allow_insecure).await?;
+    let tls = transport::tls_connect(tcp, &sni, &p.alpn, &transport::certs::CertPolicy::of(p)).await?;
     let (mut sr, mut sw) = tokio::io::split(tls);
 
     let mut first = Vec::with_capacity(256);

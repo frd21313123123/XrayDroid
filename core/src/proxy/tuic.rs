@@ -71,7 +71,7 @@ async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
         server: crate::transport::server_addr(p),
         sni: if p.sni.is_empty() { p.address.clone() } else { p.sni.clone() },
         alpn: if alpn.is_empty() { vec!["h3".into()] } else { alpn },
-        insecure: p.allow_insecure,
+        cert: crate::transport::certs::CertPolicy::of(p),
         salamander: None,
     };
     let (endpoint, conn) = quic::connect(&opts).await?;

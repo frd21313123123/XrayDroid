@@ -193,7 +193,7 @@ pub async fn delay_test(p: &Profile, url: &str) -> io::Result<u64> {
     let fut = async {
         let mut head = [0u8; 12];
         if t.tls {
-            let mut s = crate::transport::tls_connect(client, &t.host, "http/1.1", false).await?;
+            let mut s = crate::transport::tls_connect(client, &t.host, "http/1.1", &crate::transport::certs::CertPolicy::strict()).await?;
             s.write_all(req.as_bytes()).await?;
             s.read_exact(&mut head).await?;
         } else {

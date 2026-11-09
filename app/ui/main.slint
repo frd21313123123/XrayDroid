@@ -86,6 +86,7 @@ export struct ProfileForm {
     alpn: string,
     fingerprint: string,
     allow-insecure: bool,
+    pinned-cert: string,
     public-key: string,
     short-id: string,
     spider-x: string,
@@ -1433,6 +1434,13 @@ export component MainWindow inherits Window {
                         hint: "allowInsecure — отключает проверку сертификата";
                         checked: root.form.allow-insecure;
                         toggled(v) => { root.form.allow-insecure = v; }
+                    }
+                    if (root.form.protocol <= 2 && root.form.security == 1) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): Field {
+                        label: "SHA-256 сертификата (pcs)";
+                        placeholder: "для самоподписанного сертификата";
+                        mono: true;
+                        text: root.form.pinned-cert;
+                        edited(t) => { root.form.pinned-cert = t; }
                     }
                     if root.form.protocol <= 2 && root.form.security == 2: Field {
                         label: "PublicKey (pbk)";

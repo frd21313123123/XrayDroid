@@ -440,6 +440,7 @@ pub fn profile_to_form(p: &Profile) -> ProfileForm {
         alpn: p.alpn.clone().into(),
         fingerprint: p.fingerprint.clone().into(),
         allow_insecure: p.allow_insecure,
+        pinned_cert: p.pinned_cert_sha256.clone().into(),
         public_key: p.public_key.clone().into(),
         short_id: p.short_id.clone().into(),
         spider_x: p.spider_x.clone().into(),
@@ -527,6 +528,13 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     p.alpn = f.alpn.trim().to_string();
     p.fingerprint = f.fingerprint.trim().to_string();
     p.allow_insecure = f.allow_insecure;
+    p.pinned_cert_sha256 = f.pinned_cert.trim().to_string();
+    if !p.pinned_cert_sha256.is_empty()
+        && xd_core::transport::certs::parse_pins(&p.pinned_cert_sha256).len()
+            != p.pinned_cert_sha256.split(',').filter(|v| !v.trim().is_empty()).count()
+    {
+        return Err("SHA-256 сертификата: 64 hex-символа (можно с двоеточиями), несколько — через запятую".into());
+    }
     p.public_key = f.public_key.trim().to_string();
     p.short_id = f.short_id.trim().to_string();
     p.spider_x = f.spider_x.trim().to_string();

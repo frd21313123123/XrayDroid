@@ -167,7 +167,8 @@ async fn vision_conn(p: &Profile, enc: &Option<super::vless_enc::EncConfig>) -> 
                 let alpn: Vec<String> =
                     p.alpn.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                 let alpn = if alpn.is_empty() { vec!["h2".into(), "http/1.1".into()] } else { alpn };
-                tls13::handshake(Box::new(tcp), &sni, &alpn, tls13::Mode::Verify { insecure: p.allow_insecure }).await
+                let policy = transport::certs::CertPolicy::of(p);
+                tls13::handshake(Box::new(tcp), &sni, &alpn, tls13::Mode::Verify(&policy)).await
             }
             _ => Err(io_err("flow xtls-rprx-vision требует TLS, REALITY или VLESS Encryption")),
         }

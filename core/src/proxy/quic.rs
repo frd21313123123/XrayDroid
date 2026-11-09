@@ -19,25 +19,17 @@ pub struct QuicOpts {
     pub server: Address,
     pub sni: String,
     pub alpn: Vec<String>,
-    pub insecure: bool,
+    pub cert: crate::transport::certs::CertPolicy,
     /// Пароль Salamander (Hysteria2 obfs)
     pub salamander: Option<Vec<u8>>,
 }
 
-fn tls_config(alpn: &[String], insecure: bool) -> io::Result<rustls::ClientConfig> {
+fn tls_config(alpn: &[String], policy: &crate::transport::certs::CertPolicy) -> io::Result<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| io_err(e.to_string()))?;
-    let mut cfg = if insecure {
-        builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(crate::transport::NoVerifyPub::new(provider)))
-            .with_no_client_auth()
-    } else {
-        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        builder.with_root_certificates(roots).with_no_client_auth()
-    };
+    let mut cfg = crate::transport::certs::client_config(builder, policy, provider);
     cfg.alpn_protocols = alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
     cfg.enable_early_data = false;
     Ok(cfg)
@@ -55,7 +47,7 @@ pub async fn connect(o: &QuicOpts) -> io::Result<(quinn::Endpoint, quinn::Connec
     };
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(quinn::EndpointConfig::default(), None, sock, runtime)?;
 
-    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(Arc::new(tls_config(&o.alpn, o.insecure)?))
+    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(Arc::new(tls_config(&o.alpn, &o.cert)?))
         .map_err(|e| io_err(format!("QUIC TLS: {e}")))?;
     let mut cfg = quinn::ClientConfig::new(Arc::new(crypto));
     let mut t = quinn::TransportConfig::default();
