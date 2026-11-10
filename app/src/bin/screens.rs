@@ -191,6 +191,16 @@ fn main() {
     shot("13_subs_with_group");
     ui.invoke_open_page("main".into());
     shot("14_main_group");
+    // обновление приложения: предложение, загрузка, ошибка
+    xraydroid::ui::apply_update(&ui, 2, "0.2.0-build.57", "0.2.0-build.42", 0, "", true);
+    shot("15_update_dialog");
+    ui.set_update_dialog(false);
+    ui.invoke_open_page("settings".into());
+    shot("16_update_available");
+    xraydroid::ui::apply_update(&ui, 3, "0.2.0-build.57", "0.2.0-build.42", 42, "", false);
+    shot("17_update_downloading");
+    xraydroid::ui::apply_update(&ui, 5, "0.2.0-build.57", "0.2.0-build.42", 0, "Не удалось скачать обновление: HTTP 502", false);
+    shot("18_update_error");
 }
 
 #[cfg(not(target_os = "android"))]

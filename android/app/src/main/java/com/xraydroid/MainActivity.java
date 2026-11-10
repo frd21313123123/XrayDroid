@@ -2,6 +2,7 @@ package com.xraydroid;
 
 import android.Manifest;
 import android.app.NativeActivity;
+import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -27,6 +28,7 @@ public class MainActivity extends NativeActivity {
     private static final int REQ_VPN = 1;
     private BroadcastReceiver receiver;
     private Updater updater;
+    private volatile boolean vpnRunning;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -34,6 +36,7 @@ public class MainActivity extends NativeActivity {
         receiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context c, Intent i) {
+                vpnRunning = i.getBooleanExtra("running", false);
                 XrayCore.nativeOnStatus(i.getBooleanExtra("running", false),
                         String.valueOf(i.getStringExtra("error") == null ? "" : i.getStringExtra("error")),
                         i.getLongExtra("up", 0), i.getLongExtra("down", 0), i.getLongExtra("started", 0));
@@ -48,14 +51,16 @@ public class MainActivity extends NativeActivity {
         } else {
             registerReceiver(receiver, f);
         }
+        // Уведомление «обновлено» больше не нужно: окно уже открыто.
+        getSystemService(NotificationManager.class).cancel(UpdateReceiver.NOTIFY_ID);
         updater = new Updater(this);
-        updater.checkOnStart();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         queryStatus();
+        if (updater != null) updater.checkAuto();
     }
 
     @Override
@@ -80,7 +85,24 @@ public class MainActivity extends NativeActivity {
     // ───── вызывается из Rust ─────
 
     public void onUiReady() {
-        runOnUiThread(this::queryStatus);
+        runOnUiThread(() -> {
+            queryStatus();
+            if (updater != null) updater.onUiReady();
+        });
+    }
+
+    /** Проверить обновления по кнопке в настройках. */
+    public void checkUpdate() {
+        runOnUiThread(() -> { if (updater != null) updater.check(true); });
+    }
+
+    /** Скачать и установить найденное обновление. */
+    public void startUpdate() {
+        runOnUiThread(() -> { if (updater != null) updater.start(); });
+    }
+
+    boolean isVpnRunning() {
+        return vpnRunning;
     }
 
     public void startVpn() {

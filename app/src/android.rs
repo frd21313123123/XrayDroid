@@ -82,6 +82,12 @@ impl Host for AndroidHost {
             env.call_method(act, "setClipboardText", "(Ljava/lang/String;)V", &[JValue::Object(&s)]).map(|_| ())
         });
     }
+    fn check_update(&self) {
+        self.call_void("checkUpdate");
+    }
+    fn start_update(&self) {
+        self.call_void("startUpdate");
+    }
     fn installed_apps(&self) -> Vec<(String, String)> {
         let json = self
             .call(|env, act| {
@@ -200,6 +206,29 @@ pub extern "system" fn Java_com_xraydroid_XrayCore_nativeOnStatus(
     if let Some(w) = UI.get().and_then(|m| m.lock().clone()) {
         let _ = w.upgrade_in_event_loop(|ui| {
             crate::ui::apply_status(&ui, &std::cell::RefCell::new(None));
+        });
+    }
+}
+
+/// Состояние обновления приложения от Updater.java.
+#[no_mangle]
+pub extern "system" fn Java_com_xraydroid_XrayCore_nativeOnUpdate(
+    mut env: JNIEnv,
+    _: JClass,
+    state: jint,
+    version: JString,
+    current: JString,
+    progress: jint,
+    message: JString,
+    prompt: jboolean,
+) {
+    let version = jstr(&mut env, &version);
+    let current = jstr(&mut env, &current);
+    let message = jstr(&mut env, &message);
+    let prompt = prompt != 0;
+    if let Some(w) = UI.get().and_then(|m| m.lock().clone()) {
+        let _ = w.upgrade_in_event_loop(move |ui| {
+            crate::ui::apply_update(&ui, state, &version, &current, progress, &message, prompt);
         });
     }
 }

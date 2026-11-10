@@ -64,4 +64,8 @@ public final class XrayCore {
 
     /** Процесс UI: статус от сервиса. */
     public static native void nativeOnStatus(boolean running, String error, long up, long down, long startedMs);
+
+    /** Процесс UI: состояние обновления (см. Updater); prompt — предложить обновиться. */
+    public static native void nativeOnUpdate(int state, String version, String current, int progress,
+                                             String message, boolean prompt);
 }
