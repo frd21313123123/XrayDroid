@@ -1222,6 +1222,14 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             toast(&w.unwrap(), "Журнал скопирован");
         });
     }
+    // ── обновление приложения ──
+    {
+        let h = host.clone();
+        ui.on_update_check(move || h.check_update());
+        let h = host.clone();
+        ui.on_update_start(move || h.start_update());
+    }
+
     // ── автообновление подписок старше суток ──
     {
         let stale = st
@@ -1288,6 +1296,21 @@ pub fn apply_status(ui: &MainWindow, last: &RefCell<Option<(u64, u64, std::time:
         ui.set_down_unit("КБ/с".into());
         ui.set_up_value("0".into());
         ui.set_up_unit("КБ/с".into());
+    }
+}
+
+/// Состояние обновления приложения от платформы (числа состояний — как в Updater.java).
+/// `prompt` — найдена новая версия, нужно спросить пользователя.
+pub fn apply_update(ui: &MainWindow, state: i32, version: &str, current: &str, progress: i32, message: &str, prompt: bool) {
+    ui.set_update_state(state);
+    ui.set_update_version(version.into());
+    ui.set_update_current(current.into());
+    ui.set_update_progress(progress.clamp(0, 100));
+    ui.set_update_message(message.into());
+    if prompt {
+        ui.set_update_dialog(true);
+    } else if state != 2 {
+        ui.set_update_dialog(false);
     }
 }
 

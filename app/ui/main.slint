@@ -461,6 +461,15 @@ export component MainWindow inherits Window {
     in-out property <string> page: "main";
     in property <string> version;
 
+    // ── обновление приложения ──
+    // 0 — нет данных, 1 — проверка, 2 — доступно, 3 — загрузка, 4 — установка, 5 — ошибка, 6 — последняя версия
+    in property <int> update-state;
+    in property <string> update-version;
+    in property <string> update-current;
+    in property <int> update-progress;
+    in property <string> update-message;
+    in-out property <bool> update-dialog;
+
     // ── главный экран ──
     in property <[ServerItem]> servers;
     in property <[string]> groups;
@@ -585,6 +594,8 @@ export component MainWindow inherits Window {
     callback split-filter-changed(string);
 
     callback settings-save();
+    callback update-check();
+    callback update-start();
     callback apps-mode-changed(int);
     callback apps-filter-changed(string);
     callback app-toggle(string, bool);
@@ -640,6 +651,7 @@ export component MainWindow inherits Window {
             if (e.text == Key.Back || e.text == Key.Escape) {
                 if (Picker.visible) { Picker.visible = false; return accept; }
                 if (root.confirm-visible) { root.confirm-visible = false; return accept; }
+                if (root.update-dialog) { root.update-dialog = false; return accept; }
                 if (root.paste-visible) { root.paste-visible = false; return accept; }
                 if (root.sub-dialog) { root.sub-dialog = false; return accept; }
                 if (root.page == "main" && root.sheet == "") {
@@ -1182,7 +1194,86 @@ export component MainWindow inherits Window {
                     vertical-stretch: 1;
                     gap: 0px;
                     top-pad: 0px;
-                    SectionHead { title: "DNS И ТРАФИК"; pad-bottom: 6px; }
+                    SectionHead { title: "ОБНОВЛЕНИЕ"; note: root.update-current; pad-top: 8px; }
+                    Card {
+                        height: up.preferred-height;
+                        up := VerticalLayout {
+                            padding-left: 16px;
+                            padding-right: 8px;
+                            padding-top: 10px;
+                            padding-bottom: 10px;
+                            spacing: 10px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: 3px;
+                                    Text {
+                                        text: root.update-state == 1 ? "Проверка обновлений…"
+                                            : root.update-state == 2 ? "Доступна версия " + root.update-version
+                                            : root.update-state == 3 ? "Загрузка обновления"
+                                            : root.update-state == 4 ? "Установка обновления…"
+                                            : root.update-state == 5 ? "Не удалось обновить"
+                                            : root.update-state == 6 ? "Установлена последняя версия"
+                                            : "Обновления с GitHub";
+                                        color: root.update-state == 5 ? Theme.bad : Theme.ink;
+                                        font-size: 15px;
+                                        font-weight: 500;
+                                        wrap: word-wrap;
+                                    }
+                                    Hint {
+                                        text: root.update-state == 2 ? "Скачается и установится само, VPN вернётся после перезапуска"
+                                            : root.update-state == 3 ? "Версия " + root.update-version
+                                            : root.update-state == 4 ? "Приложение перезапустится само"
+                                            : root.update-state == 5 ? root.update-message
+                                            : "Проверяются при запуске приложения";
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    if root.update-state == 3: Mono {
+                                        text: root.update-progress + "%";
+                                        color: Theme.accent;
+                                        font-size: 15px;
+                                        width: 56px;
+                                        horizontal-alignment: right;
+                                    }
+                                    if root.update-state == 3 || root.update-state == 4: Rectangle { width: 8px; }
+                                    if root.update-state != 3 && root.update-state != 4: TextButton {
+                                        text: root.update-state == 2 ? "Обновить" : "Проверить";
+                                        tint: Theme.accent;
+                                        enabled: root.update-state != 1;
+                                        clicked => {
+                                            if (root.update-state == 2) {
+                                                root.update-start();
+                                            } else {
+                                                root.update-check();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.update-state == 3 || root.update-state == 4: HorizontalLayout {
+                                padding-right: 8px;
+                                padding-bottom: 4px;
+                                Rectangle {
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Theme.surface2;
+                                    Rectangle {
+                                        x: 0px;
+                                        width: parent.width * (root.update-state == 4 ? 100 : root.update-progress) / 100;
+                                        height: parent.height;
+                                        border-radius: 2px;
+                                        background: Theme.accent;
+                                        animate width { duration: 200ms; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    SectionHead { title: "DNS И ТРАФИК"; pad-top: 20px; pad-bottom: 6px; }
                     SettingRow {
                         text: "FakeDNS";
                         checked: root.settings.fake-dns;
@@ -1967,6 +2058,33 @@ export component MainWindow inherits Window {
                 clicked => {
                     root.confirm-visible = false;
                     root.confirm-ok(root.confirm-action);
+                }
+            }
+        }
+    }
+
+    // ── предложение обновиться ──
+    if root.update-dialog: DialogFrame {
+        title: "Доступна новая версия " + root.update-version;
+        dismiss => { root.update-dialog = false; }
+        Hint {
+            font-size: 14px;
+            text: "Обновить сейчас? Приложение скачает обновление, установит его и перезапустится само."
+                + (root.running ? " VPN подключится заново автоматически." : "");
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            TextButton { text: "Позже"; tint: Theme.ink2; clicked => { root.update-dialog = false; } }
+            TextButton {
+                text: "Да";
+                tint: Theme.accent;
+                clicked => {
+                    root.update-dialog = false;
+                    root.update-start();
+                    // ход загрузки виден в настройках
+                    root.sheet = "";
+                    root.show-tab("settings");
                 }
             }
         }

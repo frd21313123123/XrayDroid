@@ -18,6 +18,10 @@ pub trait Host: Send + Sync {
     fn set_clipboard(&self, text: &str);
     /// (package, label)
     fn installed_apps(&self) -> Vec<(String, String)>;
+    /// Проверить, нет ли новой версии (результат придёт в `ui::apply_update`).
+    fn check_update(&self) {}
+    /// Скачать и установить найденное обновление.
+    fn start_update(&self) {}
 }
 
 /// Заглушка для десктопа (скриншоты и отладка интерфейса).
