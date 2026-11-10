@@ -2,40 +2,26 @@ package com.xraydroid;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
-import android.content.pm.PackageInstaller;
 import android.net.Uri;
-import android.os.Build;
-import android.provider.Settings;
-import android.widget.ProgressBar;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
 /**
  * Автообновление: при запуске сверяет версию с последним релизом на GitHub,
- * предлагает обновиться, скачивает APK и ставит его поверх через PackageInstaller.
- * Подпись APK должна совпадать с установленным (используется один и тот же ключ).
+ * предлагает обновиться и открывает страницу релиза в браузере. APK приложение само
+ * не скачивает и не устанавливает (это вызывает срабатывания Google Play Protect).
  */
 final class Updater {
     private static final String REPO = "frd21313123123/XrayDroid";
-    private static final String ACTION_RESULT = "com.xraydroid.UPDATE_RESULT";
 
     private final Activity activity;
     private boolean checked;
-    private boolean busy;
-    private BroadcastReceiver resultReceiver;
 
     Updater(Activity activity) {
         this.activity = activity;
@@ -57,17 +43,13 @@ final class Updater {
     }
 
     void release() {
-        if (resultReceiver != null) {
-            try { activity.unregisterReceiver(resultReceiver); } catch (Exception ignored) {}
-            resultReceiver = null;
-        }
     }
 
     // ───── GitHub ─────
 
     private static final class Release {
         String version;
-        String apkUrl;
+        String pageUrl;
         long size;
         String notes;
     }
@@ -91,7 +73,7 @@ final class Updater {
             if (a.optString("name").endsWith(".apk")) {
                 Release r = new Release();
                 r.version = j.getString("tag_name");
-                r.apkUrl = a.getString("browser_download_url");
+                r.pageUrl = j.optString("html_url", "https://github.com/" + REPO + "/releases/latest");
                 r.size = a.optLong("size", 0);
                 r.notes = j.optString("body", "");
                 return r;
@@ -153,147 +135,19 @@ final class Updater {
     // ───── диалоги ─────
 
     private void askUser(Release r) {
-        if (activity.isFinishing() || busy) return;
+        if (activity.isFinishing()) return;
         String msg = "Доступна новая версия " + r.version.replaceFirst("^[vV]", "")
-                + (r.size > 0 ? " (" + (r.size / 1024 / 1024) + " МБ)" : "")
-                + ".\nОбновить приложение сейчас?";
+                + ".\nОткрыть страницу загрузки?";
         new AlertDialog.Builder(activity)
                 .setTitle("Доступно обновление")
                 .setMessage(msg)
-                .setPositiveButton("Обновить", (d, w) -> startUpdate(r))
+                .setPositiveButton("Открыть", (d, w) -> {
+                    try {
+                        activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(r.pageUrl)));
+                    } catch (Exception ignored) {
+                    }
+                })
                 .setNegativeButton("Позже", null)
                 .show();
-    }
-
-    private void startUpdate(Release r) {
-        // Без разрешения «Установка неизвестных приложений» система не даст поставить APK.
-        if (Build.VERSION.SDK_INT >= 26 && !activity.getPackageManager().canRequestPackageInstalls()) {
-            new AlertDialog.Builder(activity)
-                    .setTitle("Нужно разрешение")
-                    .setMessage("Разрешите XrayDroid устанавливать приложения, затем нажмите «Обновить» снова.")
-                    .setPositiveButton("Открыть настройки", (d, w) -> activity.startActivity(
-                            new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                    Uri.parse("package:" + activity.getPackageName()))))
-                    .setNegativeButton("Отмена", null)
-                    .show();
-            return;
-        }
-        busy = true;
-        ProgressBar bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(100);
-        bar.setPadding(64, 32, 64, 8);
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("Загрузка обновления")
-                .setView(bar)
-                .setCancelable(false)
-                .show();
-        new Thread(() -> {
-            try {
-                File apk = download(r, bar);
-                activity.runOnUiThread(() -> {
-                    dialog.dismiss();
-                    bar.setIndeterminate(true);
-                });
-                install(apk);
-            } catch (Exception e) {
-                activity.runOnUiThread(() -> {
-                    dialog.dismiss();
-                    busy = false;
-                    toastError("Не удалось скачать обновление: " + e.getMessage());
-                });
-            }
-        }, "xd-update-download").start();
-    }
-
-    private File download(Release r, ProgressBar bar) throws Exception {
-        File dir = new File(activity.getCacheDir(), "update");
-        if (!dir.exists()) dir.mkdirs();
-        File[] old = dir.listFiles();
-        if (old != null) for (File f : old) f.delete();
-        File out = new File(dir, "update.apk");
-        HttpURLConnection c = open(r.apkUrl);
-        try {
-            if (c.getResponseCode() != 200) throw new Exception("HTTP " + c.getResponseCode());
-            long total = c.getContentLengthLong() > 0 ? c.getContentLengthLong() : r.size;
-            try (InputStream in = c.getInputStream(); OutputStream os = new java.io.FileOutputStream(out)) {
-                byte[] buf = new byte[64 * 1024];
-                long done = 0;
-                int n, last = -1;
-                while ((n = in.read(buf)) > 0) {
-                    os.write(buf, 0, n);
-                    done += n;
-                    if (total > 0) {
-                        int p = (int) (done * 100 / total);
-                        if (p != last) {
-                            last = p;
-                            activity.runOnUiThread(() -> bar.setProgress(p));
-                        }
-                    }
-                }
-            }
-        } finally {
-            c.disconnect();
-        }
-        return out;
-    }
-
-    // ───── установка ─────
-
-    private void install(File apk) throws Exception {
-        PackageInstaller pi = activity.getPackageManager().getPackageInstaller();
-        PackageInstaller.SessionParams params =
-                new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-        params.setAppPackageName(activity.getPackageName());
-        int id = pi.createSession(params);
-        try (PackageInstaller.Session s = pi.openSession(id)) {
-            try (InputStream in = new FileInputStream(apk);
-                 OutputStream out = s.openWrite("update.apk", 0, apk.length())) {
-                byte[] buf = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                s.fsync(out);
-            }
-            activity.runOnUiThread(this::registerResultReceiver);
-            Intent cb = new Intent(ACTION_RESULT).setPackage(activity.getPackageName());
-            // Должен быть изменяемым: система дописывает в интент статус установки.
-            int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
-            PendingIntent pending = PendingIntent.getBroadcast(activity, id, cb, flags);
-            s.commit(pending.getIntentSender());
-        }
-    }
-
-    private void registerResultReceiver() {
-        if (resultReceiver != null) return;
-        resultReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
-                if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-                    // Системный экран подтверждения установки.
-                    Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
-                    if (confirm != null) {
-                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        activity.startActivity(confirm);
-                    }
-                } else if (status != PackageInstaller.STATUS_SUCCESS) {
-                    busy = false;
-                    if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {
-                        toastError("Не удалось установить обновление: "
-                                + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
-                    }
-                }
-                // При успехе система сама перезапускает/закрывает приложение.
-            }
-        };
-        IntentFilter f = new IntentFilter(ACTION_RESULT);
-        if (Build.VERSION.SDK_INT >= 33) {
-            activity.registerReceiver(resultReceiver, f, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            activity.registerReceiver(resultReceiver, f);
-        }
-    }
-
-    private void toastError(String text) {
-        android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_LONG).show();
     }
 }
