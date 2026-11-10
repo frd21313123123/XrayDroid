@@ -163,11 +163,16 @@ final class Updater {
     }
 
     private Release fetchLatest() throws Exception {
-        Release r = fetchFromApi();
+        Release r = null;
+        try {
+            r = fetchFromApi();
+        } catch (Exception ignored) {
+            // api.github.com недоступен или ответил мусором — пробуем через github.com
+        }
         return r != null ? r : fetchFromRedirect();
     }
 
-    /** Основной путь: API релизов. null — API недоступен (например, исчерпан лимит запросов). */
+    /** Основной путь: API релизов. null — API отказал (например, исчерпан лимит запросов). */
     private Release fetchFromApi() throws Exception {
         HttpURLConnection c = open("https://api.github.com/repos/" + REPO + "/releases/latest");
         String body;
