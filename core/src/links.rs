@@ -444,6 +444,12 @@ pub fn parse_link(line: &str) -> Option<Profile> {
     if p.address.is_empty() || p.port == 0 {
         return None;
     }
+    if p.network.is_empty() {
+        p.network = "tcp".into();
+    }
+    if p.security.is_empty() {
+        p.security = "none".into();
+    }
     Some(p)
 }
 
@@ -648,6 +654,61 @@ mod tests {
         assert_eq!(parse_link(&to_link(&t)).unwrap().secret, "secret");
         let a = parse_link("anytls://pw@a.com:443?sni=b.com#a").unwrap();
         assert_eq!(a.protocol, Protocol::AnyTls);
+    }
+
+    #[test]
+    fn new_schemes_and_params() {
+        // port hopping: порты в адресе и параметром mport
+        let p = parse_link("hy2://pw@example.com:443,20000-30000/?sni=a.com#h").unwrap();
+        assert_eq!((p.port, p.ports.as_str()), (443, "443,20000-30000"));
+        let p = parse_link("hysteria2://pw@example.com:443?mport=5000-6000&alpn=h3#h").unwrap();
+        assert_eq!(p.ports, "5000-6000");
+        assert_eq!(parse_link(&to_link(&p)).unwrap().ports, "5000-6000");
+        // IPv6 с одним портом — не диапазон
+        assert_eq!(parse_link("hy2://pw@[2001:db8::1]:443#h").unwrap().ports, "");
+
+        let t = parse_link("tuic://0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a:pw@1.2.3.4:443?congestion_control=cubic&udp_relay_mode=quic#t").unwrap();
+        assert_eq!((t.congestion.as_str(), t.udp_relay_mode.as_str()), ("cubic", "quic"));
+        let t2 = parse_link(&to_link(&t)).unwrap();
+        assert_eq!((t2.congestion.as_str(), t2.udp_relay_mode.as_str()), ("cubic", "quic"));
+
+        let n = parse_link("naive+https://user:pa%3Ass@n.example.com:443?padding=true#naive").unwrap();
+        assert_eq!(n.protocol, Protocol::Naive);
+        assert_eq!((n.username.as_str(), n.id_or_password.as_str(), n.security.as_str()), ("user", "pa:ss", "tls"));
+        assert_eq!(parse_link(&to_link(&n)).unwrap().id_or_password, "pa:ss");
+
+        let w = parse_link("wireguard://YNXtAzepDqRv9H52osJVDQnznT5AM11eCK3ESpwSt04%3D@162.159.192.1:2408?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzH0JuVo51h2wPfgyo%3D&address=172.16.0.2%2F32%2C2606%3A4700%3A%3A2%2F128&reserved=1%2C2%2C3&mtu=1280#warp").unwrap();
+        assert_eq!(w.protocol, Protocol::WireGuard);
+        assert_eq!(w.id_or_password, "YNXtAzepDqRv9H52osJVDQnznT5AM11eCK3ESpwSt04=");
+        assert_eq!(w.public_key, "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=");
+        assert_eq!((w.local_address.as_str(), w.reserved.as_str(), w.mtu), ("172.16.0.2/32,2606:4700::2/128", "1,2,3", 1280));
+        let w2 = parse_link(&to_link(&w)).unwrap();
+        assert_eq!((w2.public_key, w2.local_address, w2.reserved), (w.public_key, w.local_address, w.reserved));
+    }
+
+    #[test]
+    fn ss_plugin_and_transport() {
+        // v2ray-plugin в режиме websocket без мультиплексирования → транспорт ws + tls
+        let p = parse_link("ss://YWVzLTI1Ni1nY206cGFzcw@example.com:443/?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Btls%3Bhost%3Dcdn.example.com%3Bpath%3D%2Fws%3Bmux%3D0#x").unwrap();
+        assert_eq!((p.network.as_str(), p.security.as_str(), p.host.as_str(), p.path.as_str()), ("ws", "tls", "cdn.example.com", "/ws"));
+        assert_eq!(p.method, "aes-256-gcm");
+        // транспорт сохраняется в ссылке
+        let back = parse_link(&to_link(&p)).unwrap();
+        assert_eq!((back.network.as_str(), back.security.as_str(), back.path.as_str()), ("ws", "tls", "/ws"));
+        // неподдерживаемые плагины не импортируются — такой сервер всё равно не заработал бы
+        assert!(parse_link("ss://YWVzLTI1Ni1nY206cGFzcw@example.com:443/?plugin=obfs-local%3Bobfs%3Dhttp#x").is_none());
+        assert!(parse_link("ss://YWVzLTI1Ni1nY206cGFzcw@example.com:443/?plugin=v2ray-plugin%3Bhost%3Da.com#x").is_none());
+        // обычная ссылка остаётся обычной
+        let plain = parse_link("ss://YWVzLTI1Ni1nY206cGFzcw@example.com:8388#x").unwrap();
+        assert_eq!(to_link(&plain), "ss://YWVzLTI1Ni1nY206cGFzcw@example.com:8388#x");
+    }
+
+    #[test]
+    fn ws_early_data_param() {
+        let p = parse_link("vless://0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a@a.com:443?type=ws&security=tls&path=%2Fws&ed=2048#x").unwrap();
+        assert_eq!(p.path, "/ws?ed=2048");
+        let p = parse_link("vless://0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a@a.com:443?type=websocket&security=tls&path=%2Fws%3Fed%3D1024#x").unwrap();
+        assert_eq!((p.network.as_str(), p.path.as_str()), ("ws", "/ws?ed=1024"));
     }
 
     #[test]

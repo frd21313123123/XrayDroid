@@ -770,6 +770,9 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
                 f.security = 0;
                 f.network = 0;
             }
+            if p == 9 {
+                f.security = 1;
+            }
             if p != 0 {
                 f.flow = 0;
                 if f.security == 2 {
@@ -1137,6 +1140,8 @@ pub fn build(dir: PathBuf, host: Arc<dyn Host>) -> Result<MainWindow, slint::Pla
             let mut st = s.borrow_mut();
             let f = ui.get_settings();
             state::form_to_settings(&f, &mut st.cfg.settings);
+            // тесты задержки идут в этом же процессе — им нужны те же сетевые настройки
+            xd_core::transport::dialer::apply_settings(&st.cfg.settings);
             st.save();
             ui.set_apps_summary(st.apps_summary().into());
         });

@@ -27,6 +27,9 @@ use crate::config::Profile;
 const DEFAULT_MTU: usize = 1280;
 const TCP_BUF: usize = 256 * 1024;
 const DNS_TTL: Duration = Duration::from_secs(300);
+/// Туннель без соединений закрывается: иначе он вечно слал бы keepalive
+/// (например, после теста задержки). Следующее соединение откроет новый.
+const TUNNEL_IDLE: Duration = Duration::from_secs(120);
 
 // ───────────────────────── разбор параметров ─────────────────────────
 
@@ -396,6 +399,7 @@ impl Driver {
     async fn run(mut self, mut cmds: mpsc::UnboundedReceiver<Cmd>, wake: Arc<Notify>, closed: Arc<AtomicBool>) {
         let mut rbuf = vec![0u8; 65536];
         let mut last_timer = Instant::now();
+        let mut idle_since = Instant::now();
         // первое рукопожатие — сразу, не дожидаясь данных; у нового сокета готовность к записи
         // ещё не известна, и try_send без этого ожидания молча потерял бы пакет
         let _ = self.sock.writable().await;
@@ -456,6 +460,12 @@ impl Driver {
             if last_timer.elapsed() >= tick {
                 last_timer = Instant::now();
                 self.timers();
+            }
+            if !self.conns.is_empty() {
+                idle_since = Instant::now();
+            } else if idle_since.elapsed() > TUNNEL_IDLE {
+                log::debug!("WireGuard: туннель простаивает, закрываю");
+                break;
             }
         }
         closed.store(true, Ordering::Relaxed);

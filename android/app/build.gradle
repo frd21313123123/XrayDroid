@@ -3,7 +3,7 @@ plugins {
 }
 
 // Версия можно переопределить переменными окружения (их задаёт CI при каждой сборке).
-def xdVersionName = System.getenv('XD_VERSION_NAME') ?: '0.2.0'
+def xdVersionName = System.getenv('XD_VERSION_NAME') ?: '0.3.0'
 def xdVersionCode = (System.getenv('XD_VERSION_CODE') ?: '2') as int
 
 android {

@@ -86,6 +86,12 @@ export struct ProfileForm {
     obfs: int,
     obfs-password: string,
     secret: string,
+    ports: string,
+    udp-mode: int,
+    congestion: int,
+    local-address: string,
+    reserved: string,
+    wg-mtu: string,
 }
 
 export struct RuleForm {
@@ -120,6 +126,7 @@ export struct SettingsForm {
     mtu: string,
     test-url: string,
     ua: string,
+    fragment: bool,
 }
 
 // ───────────── составные элементы ─────────────
@@ -1290,6 +1297,11 @@ export component MainWindow inherits Window {
                         toggled(v) => { root.settings.ipv6 = v; root.settings-save(); }
                     }
                     SettingRow {
+                        text: "Фрагментация TLS (обход DPI)";
+                        checked: root.settings.fragment;
+                        toggled(v) => { root.settings.fragment = v; root.settings-save(); }
+                    }
+                    SettingRow {
                         text: "Блокировать QUIC";
                         last: true;
                         checked: root.settings.block-quic;
@@ -1327,7 +1339,7 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 SubHeader {
                     title: root.form-is-new ? "Новый сервер" : "Сервер";
-                    subtitle: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP"][root.form.protocol];
+                    subtitle: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP", "NaiveProxy", "WireGuard"][root.form.protocol];
                     back => { root.open-page("main"); }
                 }
                 Page {
@@ -1338,7 +1350,7 @@ export component MainWindow inherits Window {
                     SectionLabel { text: "ОСНОВНОЕ"; }
                     ChoiceCard {
                         label: "Протокол";
-                        model: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP"];
+                        model: ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP", "NaiveProxy", "WireGuard"];
                         current-index: root.form.protocol;
                         selected(i) => { root.form.protocol = i; root.form-protocol-changed(i); }
                     }
@@ -1369,31 +1381,71 @@ export component MainWindow inherits Window {
                     }
                     if root.form.protocol == 1: ChoiceCard {
                         label: "Шифрование (security)";
-                        model: ["auto", "aes-128-gcm", "chacha20-poly1305"];
+                        model: ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"];
                         current-index: root.form.method-index;
                         selected(i) => {
                             root.form.method-index = i;
-                            root.form.method = ["auto", "aes-128-gcm", "chacha20-poly1305"][i];
+                            root.form.method = ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"][i];
                         }
                     }
                     if root.form.protocol == 3: ChoiceCard {
                         label: "Метод шифрования";
-                        model: ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"];
+                        model: ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305", "xchacha20-ietf-poly1305", "none"];
                         current-index: root.form.method-index;
                         selected(i) => {
                             root.form.method-index = i;
-                            root.form.method = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"][i];
+                            root.form.method = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305", "xchacha20-ietf-poly1305", "none"][i];
                         }
                     }
-                    if root.form.protocol == 4 || root.form.protocol == 8: Field {
+                    if root.form.protocol == 4 || root.form.protocol == 8 || root.form.protocol == 9: Field {
                         label: "ЛОГИН (НЕОБЯЗАТЕЛЬНО)";
                         text: root.form.username;
                         edited(t) => { root.form.username = t; }
                     }
-                    if root.form.protocol >= 2 && root.form.protocol != 6: Field {
+                    if root.form.protocol >= 2 && root.form.protocol != 6 && root.form.protocol != 10: Field {
                         label: "ПАРОЛЬ";
                         text: root.form.uuid;
                         edited(t) => { root.form.uuid = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "ПРИВАТНЫЙ КЛЮЧ";
+                        mono: true;
+                        text: root.form.uuid;
+                        edited(t) => { root.form.uuid = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "ПУБЛИЧНЫЙ КЛЮЧ СЕРВЕРА";
+                        mono: true;
+                        text: root.form.public-key;
+                        edited(t) => { root.form.public-key = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "PRE-SHARED KEY (НЕОБЯЗАТЕЛЬНО)";
+                        mono: true;
+                        text: root.form.secret;
+                        edited(t) => { root.form.secret = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "АДРЕСА ИНТЕРФЕЙСА";
+                        placeholder: "10.0.0.2/32, fd00::2/128";
+                        mono: true;
+                        text: root.form.local-address;
+                        edited(t) => { root.form.local-address = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "RESERVED (ДЛЯ WARP)";
+                        placeholder: "0,0,0";
+                        mono: true;
+                        text: root.form.reserved;
+                        edited(t) => { root.form.reserved = t; }
+                    }
+                    if root.form.protocol == 10: Field {
+                        label: "MTU";
+                        placeholder: "1280";
+                        input-type: InputType.number;
+                        mono: true;
+                        text: root.form.wg-mtu;
+                        edited(t) => { root.form.wg-mtu = t; }
                     }
                     if root.form.protocol == 6: Field {
                         label: "ПАРОЛЬ";
@@ -1410,6 +1462,25 @@ export component MainWindow inherits Window {
                         label: "ПАРОЛЬ ОБФУСКАЦИИ";
                         text: root.form.obfs-password;
                         edited(t) => { root.form.obfs-password = t; }
+                    }
+                    if root.form.protocol == 5: Field {
+                        label: "ПОРТЫ ДЛЯ PORT HOPPING (НЕОБЯЗАТЕЛЬНО)";
+                        placeholder: "20000-30000";
+                        mono: true;
+                        text: root.form.ports;
+                        edited(t) => { root.form.ports = t; }
+                    }
+                    if root.form.protocol == 6: ChoiceCard {
+                        label: "Передача UDP";
+                        model: ["native", "quic"];
+                        current-index: root.form.udp-mode;
+                        selected(i) => { root.form.udp-mode = i; }
+                    }
+                    if root.form.protocol == 6: ChoiceCard {
+                        label: "Управление перегрузкой";
+                        model: ["bbr", "cubic", "new_reno"];
+                        current-index: root.form.congestion;
+                        selected(i) => { root.form.congestion = i; }
                     }
 
                     if root.form.protocol <= 2: SectionLabel { text: "ТРАНСПОРТ"; }
@@ -1447,7 +1518,7 @@ export component MainWindow inherits Window {
                         text: root.form.path;
                         edited(t) => { root.form.path = t; }
                     }
-                    if root.form.protocol <= 2 || root.form.protocol >= 5: SectionLabel { text: "БЕЗОПАСНОСТЬ"; }
+                    if root.form.protocol <= 2 || (root.form.protocol >= 5 && root.form.protocol <= 9): SectionLabel { text: "БЕЗОПАСНОСТЬ"; }
                     if root.form.protocol == 8: ChoiceCard {
                         label: "Подключение к прокси";
                         model: ["HTTP", "HTTPS (TLS)"];
@@ -1460,12 +1531,12 @@ export component MainWindow inherits Window {
                         current-index: root.form.security;
                         selected(i) => { root.form.security = i; }
                     }
-                    if (root.form.protocol <= 2 && root.form.security != 0) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): Field {
+                    if (root.form.protocol <= 2 && root.form.security != 0) || ((root.form.protocol >= 5 && root.form.protocol <= 7) || root.form.protocol == 9) || (root.form.protocol == 8 && root.form.security != 0): Field {
                         label: "SNI (SERVERNAME)";
                         text: root.form.sni;
                         edited(t) => { root.form.sni = t; }
                     }
-                    if root.form.protocol <= 2 && root.form.security != 0: Field {
+                    if (root.form.protocol <= 2 && root.form.security != 0) || root.form.protocol == 7: Field {
                         label: "FINGERPRINT";
                         placeholder: "chrome";
                         text: root.form.fingerprint;
@@ -1477,13 +1548,13 @@ export component MainWindow inherits Window {
                         text: root.form.alpn;
                         edited(t) => { root.form.alpn = t; }
                     }
-                    if (root.form.protocol <= 2 && root.form.security == 1) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): ToggleCard {
+                    if (root.form.protocol <= 2 && root.form.security == 1) || ((root.form.protocol >= 5 && root.form.protocol <= 7) || root.form.protocol == 9) || (root.form.protocol == 8 && root.form.security != 0): ToggleCard {
                         text: "Разрешить небезопасный сертификат";
                         hint: "allowInsecure — отключает проверку сертификата";
                         checked: root.form.allow-insecure;
                         toggled(v) => { root.form.allow-insecure = v; }
                     }
-                    if (root.form.protocol <= 2 && root.form.security == 1) || (root.form.protocol >= 5 && root.form.protocol <= 7) || (root.form.protocol == 8 && root.form.security != 0): Field {
+                    if (root.form.protocol <= 2 && root.form.security == 1) || ((root.form.protocol >= 5 && root.form.protocol <= 7) || root.form.protocol == 9) || (root.form.protocol == 8 && root.form.security != 0): Field {
                         label: "SHA-256 СЕРТИФИКАТА (PCS)";
                         placeholder: "для самоподписанного сертификата";
                         mono: true;
@@ -1977,7 +2048,7 @@ export component MainWindow inherits Window {
             clicked => {
                 root.sheet = "";
                 Picker.title = "Тип сервера";
-                Picker.items = ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP-прокси"];
+                Picker.items = ["VLESS", "VMess", "Trojan", "Shadowsocks", "SOCKS", "Hysteria2", "TUIC", "AnyTLS", "HTTP-прокси", "NaiveProxy", "WireGuard"];
                 Picker.current = -1;
                 Picker.owner = "new-server";
                 Picker.visible = true;

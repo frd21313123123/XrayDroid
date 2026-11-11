@@ -416,11 +416,15 @@ mod tests {
         // записи пересобираются в исходное сообщение
         let mut p = 0;
         let mut joined = Vec::new();
+        let mut records = 0;
         while got[p] == 0x16 {
             let l = u16::from_be_bytes([got[p + 3], got[p + 4]]) as usize;
+            assert!(l <= 200, "запись длиннее заданного предела");
             joined.extend_from_slice(&got[p + 5..p + 5 + l]);
             p += 5 + l;
+            records += 1;
         }
+        assert!(records >= 4, "рукопожатие должно уйти несколькими записями, а ушло {records}");
         assert_eq!(joined, body);
         assert_eq!(&got[p..], b"after");
     }

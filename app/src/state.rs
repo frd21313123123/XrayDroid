@@ -7,15 +7,18 @@ use xd_core::config::{AppConfig, OutboundTag, Profile, Protocol, RoutingRule, Sp
 
 use crate::{AppItem, ProfileForm, RuleForm, RuleItem, ServerItem, SettingsForm, SplitForm, SplitItem, SubItem};
 
-pub const SS_METHODS: [&str; 6] = [
+pub const SS_METHODS: [&str; 8] = [
     "aes-128-gcm",
     "aes-256-gcm",
     "chacha20-ietf-poly1305",
     "2022-blake3-aes-128-gcm",
     "2022-blake3-aes-256-gcm",
     "2022-blake3-chacha20-poly1305",
+    "xchacha20-ietf-poly1305",
+    "none",
 ];
-pub const VMESS_METHODS: [&str; 3] = ["auto", "aes-128-gcm", "chacha20-poly1305"];
+pub const VMESS_METHODS: [&str; 5] = ["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"];
+pub const CONGESTION: [&str; 3] = ["bbr", "cubic", "new_reno"];
 pub const NETWORKS: [&str; 5] = ["tcp", "ws", "httpupgrade", "grpc", "xhttp"];
 pub const SECURITIES: [&str; 3] = ["none", "tls", "reality"];
 
@@ -40,6 +43,7 @@ pub struct State {
 impl State {
     pub fn load(dir: &Path) -> State {
         let cfg = AppConfig::load(&dir.join("config.json"));
+        xd_core::transport::dialer::apply_settings(&cfg.settings);
         State {
             cfg,
             dir: dir.to_path_buf(),
@@ -428,12 +432,18 @@ pub fn profile_to_form(p: &Profile) -> ProfileForm {
         obfs: if p.obfs == "salamander" { 1 } else { 0 },
         obfs_password: p.obfs_password.clone().into(),
         secret: p.secret.clone().into(),
+        ports: p.ports.clone().into(),
+        udp_mode: if p.udp_relay_mode == "quic" { 1 } else { 0 },
+        congestion: CONGESTION.iter().position(|c| *c == p.congestion.as_str()).unwrap_or(0) as i32,
+        local_address: p.local_address.clone().into(),
+        reserved: p.reserved.clone().into(),
+        wg_mtu: if p.mtu == 0 { SharedString::new() } else { p.mtu.to_string().into() },
     }
 }
 
 /// Проверка и преобразование формы. Возвращает ошибку для пользователя.
 pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profile, String> {
-    let protocol = Protocol::all()[f.protocol.clamp(0, 8) as usize];
+    let protocol = Protocol::all()[f.protocol.clamp(0, 10) as usize];
     let mut p = base.cloned().unwrap_or_default();
     if p.id.is_empty() {
         p.id = Profile::new_id();
@@ -457,12 +467,21 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
                 return Err("Укажите пароль".into());
             }
         }
-        Protocol::Socks | Protocol::Http => {}
+        Protocol::WireGuard => {
+            if xd_core::proxy::wireguard::parse_key(&p.id_or_password).is_err() {
+                return Err("Приватный ключ: 32 байта в base64".into());
+            }
+        }
+        Protocol::Socks | Protocol::Http | Protocol::Naive => {}
     }
     p.username = f.username.trim().to_string();
     p.method = match protocol {
-        Protocol::Shadowsocks => SS_METHODS[f.method_index.clamp(0, 5) as usize].to_string(),
-        Protocol::Vmess => VMESS_METHODS[f.method_index.clamp(0, 2) as usize].to_string(),
+        // метод из импортированного профиля может не входить в список — тогда он сохраняется как есть
+        Protocol::Shadowsocks | Protocol::Vmess if !f.method.trim().is_empty() && base.map(|b| b.protocol == protocol).unwrap_or(false) => {
+            f.method.trim().to_string()
+        }
+        Protocol::Shadowsocks => SS_METHODS[f.method_index.clamp(0, SS_METHODS.len() as i32 - 1) as usize].to_string(),
+        Protocol::Vmess => VMESS_METHODS[f.method_index.clamp(0, VMESS_METHODS.len() as i32 - 1) as usize].to_string(),
         Protocol::Vless => {
             let m = f.method.trim();
             if m.is_empty() { "none".into() } else { m.to_string() }
@@ -480,18 +499,54 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
         }
     }
     let stream = protocol.has_transport();
-    p.network = if stream { NETWORKS[f.network.clamp(0, 4) as usize].into() } else { "tcp".into() };
-    p.security = match protocol {
-        _ if stream => SECURITIES[f.security.clamp(0, 2) as usize].into(),
-        Protocol::Hysteria2 | Protocol::Tuic | Protocol::AnyTls => "tls".into(),
-        Protocol::Http => SECURITIES[f.security.clamp(0, 1) as usize].into(),
-        _ => "none".into(),
-    };
+    // Shadowsocks поверх транспорта (импортированный профиль) — транспорт не трогаем
+    let keep_stream = protocol == Protocol::Shadowsocks && base.map(|b| b.protocol == protocol).unwrap_or(false);
+    if !keep_stream {
+        p.network = if stream { NETWORKS[f.network.clamp(0, 4) as usize].into() } else { "tcp".into() };
+        p.security = match protocol {
+            _ if stream => SECURITIES[f.security.clamp(0, 2) as usize].into(),
+            _ if protocol.always_tls() => "tls".into(),
+            Protocol::Http => SECURITIES[f.security.clamp(0, 1) as usize].into(),
+            _ => "none".into(),
+        };
+    }
     p.obfs = if protocol == Protocol::Hysteria2 && f.obfs == 1 { "salamander".into() } else { String::new() };
     p.obfs_password = if p.obfs.is_empty() { String::new() } else { f.obfs_password.to_string() };
-    p.secret = if protocol == Protocol::Tuic { f.secret.to_string() } else { String::new() };
+    p.secret = if matches!(protocol, Protocol::Tuic | Protocol::WireGuard) { f.secret.trim().to_string() } else { String::new() };
     if protocol == Protocol::Tuic && p.secret.is_empty() {
         return Err("Укажите пароль TUIC".into());
+    }
+    p.ports = if protocol == Protocol::Hysteria2 { f.ports.trim().to_string() } else { String::new() };
+    if !p.ports.is_empty() && xd_core::proxy::quic::parse_ports(&p.ports).is_empty() {
+        return Err("Порты: диапазоны через запятую, например 20000-30000".into());
+    }
+    p.udp_relay_mode = if protocol == Protocol::Tuic && f.udp_mode == 1 { "quic".into() } else { String::new() };
+    p.congestion = match (protocol, f.congestion) {
+        (Protocol::Tuic, 1) => "cubic".into(),
+        (Protocol::Tuic, 2) => "new_reno".into(),
+        _ => String::new(),
+    };
+    if protocol == Protocol::WireGuard {
+        p.local_address = f.local_address.trim().to_string();
+        p.reserved = f.reserved.trim().to_string();
+        p.mtu = f.wg_mtu.trim().parse().unwrap_or(0);
+        p.public_key = f.public_key.trim().to_string();
+        if xd_core::proxy::wireguard::parse_key(&p.public_key).is_err() {
+            return Err("Публичный ключ сервера: 32 байта в base64".into());
+        }
+        if !p.secret.is_empty() && xd_core::proxy::wireguard::parse_key(&p.secret).is_err() {
+            return Err("Pre-shared key: 32 байта в base64".into());
+        }
+        if let Err(e) = xd_core::proxy::wireguard::parse_addresses(&p.local_address) {
+            return Err(e.to_string());
+        }
+        if let Err(e) = xd_core::proxy::wireguard::parse_reserved(&p.reserved) {
+            return Err(e.to_string());
+        }
+    } else {
+        p.local_address = String::new();
+        p.reserved = String::new();
+        p.mtu = 0;
     }
     if p.security == "reality" && protocol != Protocol::Vless {
         return Err("REALITY поддерживается только с VLESS".into());
@@ -516,7 +571,9 @@ pub fn form_to_profile(f: &ProfileForm, base: Option<&Profile>) -> Result<Profil
     {
         return Err("SHA-256 сертификата: 64 hex-символа (можно с двоеточиями), несколько — через запятую".into());
     }
-    p.public_key = f.public_key.trim().to_string();
+    if protocol != Protocol::WireGuard {
+        p.public_key = f.public_key.trim().to_string();
+    }
     p.short_id = f.short_id.trim().to_string();
     p.spider_x = f.spider_x.trim().to_string();
     if p.security == "reality" && p.public_key.is_empty() {
@@ -536,9 +593,12 @@ pub fn new_form(protocol: i32, allow_insecure: bool) -> ProfileForm {
     let mut f = profile_to_form(&Profile { port: 443, ..Default::default() });
     f.protocol = protocol;
     f.security = match protocol {
-        2 | 5 | 6 | 7 => 1,
+        2 | 5 | 6 | 7 | 9 => 1,
         _ => 0,
     };
+    if protocol == 10 {
+        f.port = "51820".into();
+    }
     f.allow_insecure = allow_insecure;
     if protocol == 0 {
         f.fingerprint = "chrome".into();
@@ -601,6 +661,7 @@ pub fn settings_to_form(s: &xd_core::config::Settings) -> SettingsForm {
         mtu: s.mtu.to_string().into(),
         test_url: s.test_url.clone().into(),
         ua: s.sub_user_agent.clone().into(),
+        fragment: s.fragment,
     }
 }
 
@@ -615,6 +676,7 @@ pub fn form_to_settings(f: &SettingsForm, s: &mut xd_core::config::Settings) {
         }
     }
     s.block_quic = f.block_quic;
+    s.fragment = f.fragment;
     s.allow_insecure_default = f.allow_insecure;
     if !f.dns.trim().is_empty() {
         s.dns_server = f.dns.trim().to_string();
@@ -704,6 +766,58 @@ mod tests {
         assert_eq!(kind_label(&h), "Hysteria2 · Salamander");
         let ss = Profile { protocol: Protocol::Shadowsocks, method: "2022-blake3-aes-128-gcm".into(), ..Default::default() };
         assert_eq!(kind_label(&ss), "Shadowsocks 2022");
+    }
+
+    #[test]
+    fn new_protocol_forms() {
+        // WireGuard: ключи и адреса проверяются, поля возвращаются в профиль
+        let wg = xd_core::links::parse_link("wireguard://YNXtAzepDqRv9H52osJVDQnznT5AM11eCK3ESpwSt04%3D@1.2.3.4:51820?publickey=bmXOC%2BF1FxEMF9dyiK2H5%2F1SUtzH0JuVo51h2wPfgyo%3D&address=10.0.0.2%2F32&reserved=1%2C2%2C3&mtu=1380#wg").unwrap();
+        let f = profile_to_form(&wg);
+        assert_eq!(f.protocol, 10);
+        let back = form_to_profile(&f, Some(&wg)).unwrap();
+        assert_eq!(back, wg);
+        let mut bad = f.clone();
+        bad.public_key = "short".into();
+        assert!(form_to_profile(&bad, Some(&wg)).is_err());
+        let mut bad = f.clone();
+        bad.local_address = "".into();
+        assert!(form_to_profile(&bad, Some(&wg)).is_err());
+
+        // Naive: всегда TLS
+        let mut nf = new_form(9, false);
+        nf.address = "n.example.com".into();
+        nf.username = "u".into();
+        nf.uuid = "p".into();
+        let n = form_to_profile(&nf, None).unwrap();
+        assert_eq!((n.protocol, n.security.as_str()), (Protocol::Naive, "tls"));
+
+        // Hysteria2 с port hopping и TUIC с режимами
+        let hy = xd_core::links::parse_link("hy2://pw@h.com:443?mport=20000-30000#h").unwrap();
+        assert_eq!(form_to_profile(&profile_to_form(&hy), Some(&hy)).unwrap().ports, "20000-30000");
+        let mut hf = profile_to_form(&hy);
+        hf.ports = "abc".into();
+        assert!(form_to_profile(&hf, Some(&hy)).is_err());
+        let tu = xd_core::links::parse_link("tuic://0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a:pw@t.com:443?congestion_control=cubic&udp_relay_mode=quic#t").unwrap();
+        let tb = form_to_profile(&profile_to_form(&tu), Some(&tu)).unwrap();
+        assert_eq!((tb.congestion.as_str(), tb.udp_relay_mode.as_str()), ("cubic", "quic"));
+    }
+
+    #[test]
+    fn imported_method_and_transport_survive_edit() {
+        // метод, которого нет в списке формы, и транспорт Shadowsocks не теряются при сохранении
+        let ss = xd_core::links::parse_link("ss://YWVzLTI1Ni1jZmI6cGFzcw@example.com:443?type=ws&security=tls&path=%2Fws#x").unwrap();
+        assert_eq!(ss.method, "aes-256-cfb");
+        let mut f = profile_to_form(&ss);
+        f.remarks = "переименован".into();
+        let back = form_to_profile(&f, Some(&ss)).unwrap();
+        assert_eq!((back.method.as_str(), back.network.as_str(), back.security.as_str(), back.path.as_str()), ("aes-256-cfb", "ws", "tls", "/ws"));
+        // VMess zero выбирается из списка
+        let mut vf = new_form(1, false);
+        vf.address = "v.com".into();
+        vf.uuid = "0a6b0b6f-9e4c-4d0c-9f3a-1f2e3d4c5b6a".into();
+        vf.method_index = 4;
+        vf.method = "zero".into();
+        assert_eq!(form_to_profile(&vf, None).unwrap().method, "zero");
     }
 
     #[test]

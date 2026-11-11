@@ -7118,7 +7118,7 @@ dependencies = [
 
 [[package]]
 name = "xd-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "i-slint-core",
  "jni 0.21.1",
@@ -7135,7 +7135,7 @@ dependencies = [
 
 [[package]]
 name = "xd-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
