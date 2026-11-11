@@ -1,6 +1,7 @@
 //! Транспортный уровень: TCP → (TLS | REALITY) → (WebSocket | HTTPUpgrade | raw).
 
 pub mod certs;
+pub mod dialer;
 pub mod http2;
 pub mod reality;
 pub mod secure;
@@ -16,7 +17,6 @@ use parking_lot::Mutex;
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::common::{io_err, Address, BoxStream};
@@ -25,13 +25,7 @@ use crate::config::Profile;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn connect_tcp(addr: &Address) -> io::Result<TcpStream> {
-    let fut = async {
-        let sa = addr.resolve().await?;
-        let s = TcpStream::connect(sa).await?;
-        s.set_nodelay(true).ok();
-        Ok::<_, io::Error>(s)
-    };
-    tokio::time::timeout(CONNECT_TIMEOUT, fut)
+    tokio::time::timeout(CONNECT_TIMEOUT, dialer::connect(addr))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, format!("таймаут подключения к {addr}")))?
 }
@@ -72,11 +66,25 @@ pub fn network(p: &Profile) -> &str {
 pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
     let net = network(p);
     match net {
-        "tcp" | "ws" | "httpupgrade" | "grpc" | "xhttp" => {}
+        "tcp" | "ws" | "httpupgrade" => {}
+        // HTTP/2-транспорты переиспользуют соединения: новый поток не требует нового рукопожатия
+        "grpc" => return http2::grpc(p).await,
+        "xhttp" => return http2::xhttp(p).await,
         other => return Err(io_err(format!("транспорт «{other}» пока не поддерживается"))),
     }
-    let tcp = connect_tcp(&server_addr(p)).await?;
-    let secured: BoxStream = match p.security.as_str() {
+    let secured = dial_secured(p).await?;
+    match net {
+        "ws" => websocket(secured, p).await,
+        "httpupgrade" => http_upgrade(secured, p).await,
+        _ if p.header_type == "http" => http2::http_obfs(secured, p).await,
+        _ => Ok(secured),
+    }
+}
+
+/// TCP до сервера и слой безопасности профиля (TLS / REALITY / нет).
+pub async fn dial_secured(p: &Profile) -> io::Result<BoxStream> {
+    let net = network(p);
+    match p.security.as_str() {
         "tls" => {
             let default_alpn = match net {
                 "ws" | "httpupgrade" => "http/1.1",
@@ -84,24 +92,18 @@ pub async fn dial(p: &Profile) -> io::Result<BoxStream> {
                 _ => "",
             };
             let alpn = if p.alpn.is_empty() { default_alpn } else { &p.alpn };
-            tls_for_profile(tcp, p, alpn).await?
+            let tcp = dialer::connect_for_tls(&server_addr(p)).await?;
+            tls_for_profile(tcp, p, alpn).await
         }
         "reality" => {
             let cfg = reality_config(p)?;
-            let conn = tokio::time::timeout(CONNECT_TIMEOUT, reality::connect(tcp, &cfg))
+            let tcp = dialer::connect_for_tls(&server_addr(p)).await?;
+            let conn = tokio::time::timeout(CONNECT_TIMEOUT, reality::connect_stream(tcp, &cfg))
                 .await
                 .map_err(|_| io_err("таймаут рукопожатия REALITY"))??;
-            conn.into_stream()
+            Ok(conn.into_stream())
         }
-        _ => Box::new(tcp),
-    };
-    match net {
-        "ws" => websocket(secured, p).await,
-        "httpupgrade" => http_upgrade(secured, p).await,
-        "grpc" => http2::grpc(secured, p).await,
-        "xhttp" => http2::xhttp(secured, p).await,
-        _ if p.header_type == "http" => http2::http_obfs(secured, p).await,
-        _ => Ok(secured),
+        _ => Ok(Box::new(connect_tcp(&server_addr(p)).await?)),
     }
 }
 
@@ -122,19 +124,19 @@ fn plain_tls_only() -> &'static Mutex<std::collections::HashSet<String>> {
 }
 
 /// TLS для профиля: ClientHello в стиле Chrome (как uTLS в Xray), при неудаче — rustls.
-async fn tls_for_profile(tcp: TcpStream, p: &Profile, alpn: &str) -> io::Result<BoxStream> {
+pub async fn tls_for_profile(tcp: BoxStream, p: &Profile, alpn: &str) -> io::Result<BoxStream> {
     let sni = sni_of(p);
     let key = format!("{}:{}|{}", p.address, p.port, sni);
     let policy = certs::CertPolicy::of(p);
     if browser_hello(&p.fingerprint) && !plain_tls_only().lock().contains(&key) {
         let protos: Vec<String> = alpn.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        let hs = tls13::handshake(Box::new(tcp), &sni, &protos, tls13::Mode::Verify(&policy));
+        let hs = tls13::handshake(tcp, &sni, &protos, tls13::Mode::Verify(&policy));
         match tokio::time::timeout(CONNECT_TIMEOUT, hs).await {
             Ok(Ok(conn)) => return Ok(conn.into_stream()),
             Err(_) => return Err(io_err("таймаут TLS-рукопожатия")),
             Ok(Err(e)) => {
                 log::info!("TLS {}: рукопожатие в стиле Chrome не удалось ({e}), пробую стандартное", p.address);
-                let tcp = connect_tcp(&server_addr(p)).await?;
+                let tcp = dialer::connect_for_tls(&server_addr(p)).await?;
                 let s = tls_connect(tcp, &sni, alpn, &policy).await?;
                 plain_tls_only().lock().insert(key);
                 return Ok(Box::new(s));
@@ -248,25 +250,76 @@ fn ws_path(p: &Profile) -> String {
     }
 }
 
-async fn websocket(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
-    let host = ws_host(p);
-    let url = format!("ws://{}{}", host, ws_path(p));
-    let mut req = url.into_client_request().map_err(|e| io_err(format!("WS: {e}")))?;
-    req.headers_mut().insert(
-        "User-Agent",
-        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
-            .parse()
-            .unwrap(),
+/// Xray: `?ed=2048` в пути — не часть пути, а размер «ранних данных» (0-RTT):
+/// первые байты уходят прямо в запросе рукопожатия.
+pub fn split_early_data(path: &str) -> (String, usize) {
+    let Some((base, query)) = path.split_once('?') else { return (path.to_string(), 0) };
+    let mut ed = 0usize;
+    let rest: Vec<&str> = query
+        .split('&')
+        .filter(|kv| match kv.strip_prefix("ed=") {
+            Some(v) => {
+                ed = v.parse().unwrap_or(0);
+                false
+            }
+            None => !kv.is_empty(),
+        })
+        .collect();
+    let path = if rest.is_empty() { base.to_string() } else { format!("{base}?{}", rest.join("&")) };
+    (path, ed.min(8192))
+}
+
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+
+async fn read_http_head(stream: &mut BoxStream, what: &str) -> io::Result<String> {
+    let mut resp = Vec::new();
+    let mut b = [0u8; 1];
+    while !resp.ends_with(b"\r\n\r\n") {
+        if stream.read(&mut b).await? == 0 {
+            return Err(io_err(format!("{what}: соединение закрыто")));
+        }
+        resp.push(b[0]);
+        if resp.len() > 16384 {
+            return Err(io_err(format!("{what}: слишком длинный ответ")));
+        }
+    }
+    Ok(String::from_utf8_lossy(&resp).into_owned())
+}
+
+type WsStream = tokio_tungstenite::WebSocketStream<BoxStream>;
+
+/// Рукопожатие WebSocket. `early` — данные, которые едут в заголовке
+/// `Sec-WebSocket-Protocol` (как в Xray и sing-box).
+async fn ws_handshake(mut stream: BoxStream, host: &str, path: &str, early: Option<&[u8]>) -> io::Result<WsStream> {
+    use base64::Engine;
+    let mut key = [0u8; 16];
+    crate::common::random_bytes(&mut key);
+    let mut req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: {BROWSER_UA}\r\n",
+        base64::engine::general_purpose::STANDARD.encode(key)
     );
-    let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::client_async(req, stream))
-        .await
-        .map_err(|_| io_err("таймаут WebSocket"))?
-        .map_err(|e| io_err(format!("WebSocket: {e}")))?;
+    if let Some(e) = early.filter(|e| !e.is_empty()) {
+        req.push_str(&format!("Sec-WebSocket-Protocol: {}\r\n", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(e)));
+    }
+    req.push_str("\r\n");
+    stream.write_all(req.as_bytes()).await?;
+    let head = read_http_head(&mut stream, "WebSocket").await?;
+    let status = head.split_whitespace().nth(1).unwrap_or("");
+    if status != "101" {
+        return Err(io_err(format!("WebSocket: {}", head.lines().next().unwrap_or(""))));
+    }
+    Ok(tokio_tungstenite::WebSocketStream::from_raw_socket(stream, tokio_tungstenite::tungstenite::protocol::Role::Client, None).await)
+}
+
+fn ws_pumps(ws: WsStream, b: tokio::io::DuplexStream, first: Vec<u8>) {
     let (mut sink, mut source) = ws.split();
-    let (a, b) = tokio::io::duplex(128 * 1024);
     let (mut br, mut bw) = tokio::io::split(b);
     tokio::spawn(async move {
-        let mut buf = vec![0u8; 16 * 1024];
+        if !first.is_empty() && sink.send(Message::Binary(first.into())).await.is_err() {
+            return;
+        }
+        let mut buf = vec![0u8; 32 * 1024];
         loop {
             match br.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
@@ -293,30 +346,64 @@ async fn websocket(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
         }
         let _ = bw.shutdown().await;
     });
+}
+
+async fn websocket(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
+    let host = ws_host(p);
+    let (path, ed) = split_early_data(&ws_path(p));
+    let (a, b) = tokio::io::duplex(128 * 1024);
+    if ed == 0 {
+        let ws = tokio::time::timeout(CONNECT_TIMEOUT, ws_handshake(stream, &host, &path, None))
+            .await
+            .map_err(|_| io_err("таймаут WebSocket"))??;
+        ws_pumps(ws, b, Vec::new());
+        return Ok(Box::new(a));
+    }
+    // ранние данные: рукопожатие откладывается до первой записи протокола
+    let address = p.address.clone();
+    tokio::spawn(async move {
+        let mut b = b;
+        let mut first = vec![0u8; 16 * 1024];
+        let n = match b.read(&mut first).await {
+            Ok(n) if n > 0 => n,
+            _ => return,
+        };
+        first.truncate(n);
+        let cut = n.min(ed);
+        match tokio::time::timeout(CONNECT_TIMEOUT, ws_handshake(stream, &host, &path, Some(&first[..cut]))).await {
+            Ok(Ok(ws)) => ws_pumps(ws, b, first.split_off(cut)),
+            Ok(Err(e)) => log::warn!("{address}: {e}"),
+            Err(_) => log::warn!("{address}: таймаут WebSocket"),
+        }
+    });
     Ok(Box::new(a))
 }
 
 async fn http_upgrade(mut stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
+    let (path, _) = split_early_data(&ws_path(p));
     let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nUser-Agent: Mozilla/5.0\r\n\r\n",
-        ws_path(p),
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nUser-Agent: {BROWSER_UA}\r\n\r\n",
         ws_host(p)
     );
     stream.write_all(req.as_bytes()).await?;
-    let mut resp = Vec::new();
-    let mut b = [0u8; 1];
-    while !resp.ends_with(b"\r\n\r\n") {
-        if stream.read(&mut b).await? == 0 {
-            return Err(io_err("HTTPUpgrade: соединение закрыто"));
-        }
-        resp.push(b[0]);
-        if resp.len() > 8192 {
-            return Err(io_err("HTTPUpgrade: слишком длинный ответ"));
-        }
-    }
-    let line = String::from_utf8_lossy(&resp);
-    if !line.starts_with("HTTP/1.1 101") {
-        return Err(io_err(format!("HTTPUpgrade: {}", line.lines().next().unwrap_or(""))));
+    // Ответ ждём всегда: сервер Xray читает запрос через буфер и теряет данные,
+    // пришедшие вместе с ним, поэтому отправка «вдогонку» (ed) ненадёжна.
+    let head = read_http_head(&mut stream, "HTTPUpgrade").await?;
+    if head.split_whitespace().nth(1) != Some("101") {
+        return Err(io_err(format!("HTTPUpgrade: {}", head.lines().next().unwrap_or(""))));
     }
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn early_data_in_path() {
+        assert_eq!(split_early_data("/ws?ed=2048"), ("/ws".to_string(), 2048));
+        assert_eq!(split_early_data("/ws?a=b&ed=1024&c=d"), ("/ws?a=b&c=d".to_string(), 1024));
+        assert_eq!(split_early_data("/ws"), ("/ws".to_string(), 0));
+        assert_eq!(split_early_data("/ws?x=1"), ("/ws?x=1".to_string(), 0));
+    }
 }

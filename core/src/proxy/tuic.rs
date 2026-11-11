@@ -58,6 +58,57 @@ fn addr_len(b: &[u8]) -> Option<usize> {
     })
 }
 
+type Frags = HashMap<(u16, u16), Vec<Option<Vec<u8>>>>;
+
+/// Разбор команды Packet: [VER][0x02][ASSOC u16][PKT u16][FRAG_TOTAL][FRAG_ID][SIZE u16][ADDR][DATA]
+fn on_packet(c: &Client, frags: &Mutex<Frags>, d: &[u8]) {
+    if d.len() < 10 || d[0] != VER || d[1] != 0x02 {
+        return;
+    }
+    let assoc = u16::from_be_bytes([d[2], d[3]]);
+    let pkt = u16::from_be_bytes([d[4], d[5]]);
+    let (total, fid) = (d[6] as usize, d[7] as usize);
+    let size = u16::from_be_bytes([d[8], d[9]]) as usize;
+    let Some(al) = addr_len(&d[10..]) else { return };
+    let start = 10 + al;
+    if start + size > d.len() || total == 0 || fid >= total {
+        return;
+    }
+    let payload = d[start..start + size].to_vec();
+    let full = if total == 1 {
+        Some(payload)
+    } else {
+        let mut frags = frags.lock();
+        let e = frags.entry((assoc, pkt)).or_insert_with(|| vec![None; total]);
+        if e.len() != total {
+            *e = vec![None; total];
+        }
+        e[fid] = Some(payload);
+        if e.iter().all(|x| x.is_some()) {
+            Some(frags.remove(&(assoc, pkt)).unwrap().into_iter().flatten().flatten().collect())
+        } else {
+            if frags.len() > 256 {
+                frags.clear();
+            }
+            None
+        }
+    };
+    if let Some(v) = full {
+        let tx = c.assocs.lock().get(&assoc).cloned();
+        if let Some(tx) = tx {
+            let _ = tx.try_send(v);
+        }
+    }
+}
+
+pub fn reset() {
+    if let Ok(mut m) = clients().try_lock() {
+        for (_, c) in m.drain() {
+            c.conn.close(0u32.into(), b"");
+        }
+    }
+}
+
 async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
     let key = crate::links::to_link(p);
     let mut map = clients().lock().await;
@@ -73,6 +124,8 @@ async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
         alpn: if alpn.is_empty() { vec!["h3".into()] } else { alpn },
         cert: crate::transport::certs::CertPolicy::of(p),
         salamander: None,
+        hop_ports: Vec::new(),
+        congestion: p.congestion.clone(),
     };
     let (endpoint, conn) = quic::connect(&opts).await?;
     let uuid = super::vless::parse_uuid(&p.id_or_password)?;
@@ -87,44 +140,23 @@ async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
     let _ = uni.finish();
 
     let client = Arc::new(Client { _endpoint: endpoint, conn, assocs: Mutex::new(HashMap::new()), next_assoc: AtomicU16::new(1) });
-    let c2 = client.clone();
+    // UDP-пакеты приходят датаграммами (native) или отдельными потоками (quic)
+    let frags: Arc<Mutex<Frags>> = Arc::new(Mutex::new(HashMap::new()));
+    let (c2, f2) = (client.clone(), frags.clone());
     tokio::spawn(async move {
-        let mut frags: HashMap<(u16, u16), Vec<Option<Vec<u8>>>> = HashMap::new();
         while let Ok(d) = c2.conn.read_datagram().await {
-            // [VER][0x02][ASSOC u16][PKT u16][FRAG_TOTAL][FRAG_ID][SIZE u16][ADDR][DATA]
-            if d.len() < 10 || d[0] != VER || d[1] != 0x02 {
-                continue;
-            }
-            let assoc = u16::from_be_bytes([d[2], d[3]]);
-            let pkt = u16::from_be_bytes([d[4], d[5]]);
-            let (total, fid) = (d[6] as usize, d[7] as usize);
-            let size = u16::from_be_bytes([d[8], d[9]]) as usize;
-            let Some(al) = addr_len(&d[10..]) else { continue };
-            let start = 10 + al;
-            if start + size > d.len() || total == 0 || fid >= total {
-                continue;
-            }
-            let payload = d[start..start + size].to_vec();
-            let full = if total == 1 {
-                Some(payload)
-            } else {
-                let e = frags.entry((assoc, pkt)).or_insert_with(|| vec![None; total]);
-                e[fid] = Some(payload);
-                if e.iter().all(|x| x.is_some()) {
-                    Some(frags.remove(&(assoc, pkt)).unwrap().into_iter().flatten().flatten().collect())
-                } else {
-                    if frags.len() > 256 {
-                        frags.clear();
-                    }
-                    None
+            on_packet(&c2, &f2, &d);
+        }
+    });
+    let c3 = client.clone();
+    tokio::spawn(async move {
+        while let Ok(mut uni) = c3.conn.accept_uni().await {
+            let (c, f) = (c3.clone(), frags.clone());
+            tokio::spawn(async move {
+                if let Ok(d) = uni.read_to_end(70_000).await {
+                    on_packet(&c, &f, &d);
                 }
-            };
-            if let Some(v) = full {
-                let tx = c2.assocs.lock().get(&assoc).cloned();
-                if let Some(tx) = tx {
-                    let _ = tx.try_send(v);
-                }
-            }
+            });
         }
     });
     map.insert(key, client.clone());
@@ -147,15 +179,31 @@ pub async fn udp(p: &Profile, mut app: BoxStream, dest: &Address) -> io::Result<
     c.assocs.lock().insert(assoc, tx);
     let mut pkt: u16 = 0;
     let mut buf = vec![0u8; 65536];
+    // udp_relay_mode=quic: каждый пакет — отдельный поток (надёжная доставка, без ограничения MTU)
+    let by_stream = p.udp_relay_mode.eq_ignore_ascii_case("quic");
     let r: io::Result<()> = async {
         loop {
             tokio::select! {
                 r = app.read(&mut buf) => {
                     let n = r?;
                     if n == 0 { break; }
-                    let max = c.conn.max_datagram_size().unwrap_or(1200);
                     let mut addr = Vec::new();
                     write_addr(dest, &mut addr);
+                    if by_stream {
+                        let mut d = vec![VER, 0x02];
+                        d.extend_from_slice(&assoc.to_be_bytes());
+                        d.extend_from_slice(&pkt.to_be_bytes());
+                        d.extend_from_slice(&[1, 0]);
+                        d.extend_from_slice(&(n as u16).to_be_bytes());
+                        d.extend_from_slice(&addr);
+                        d.extend_from_slice(&buf[..n]);
+                        let mut uni = c.conn.open_uni().await.map_err(|e| io_err(format!("TUIC: {e}")))?;
+                        uni.write_all(&d).await.map_err(|e| io_err(e.to_string()))?;
+                        let _ = uni.finish();
+                        pkt = pkt.wrapping_add(1);
+                        continue;
+                    }
+                    let max = c.conn.max_datagram_size().unwrap_or(1200);
                     let room = max.saturating_sub(10 + addr.len()).max(1);
                     let parts: Vec<&[u8]> = buf[..n].chunks(room).collect();
                     if parts.len() > 255 { continue; }

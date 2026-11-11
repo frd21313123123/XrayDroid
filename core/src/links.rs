@@ -1,4 +1,5 @@
-//! Разбор и генерация ссылок: vless://, vmess://, trojan://, ss://, socks://
+//! Разбор и генерация ссылок: vless://, vmess://, trojan://, ss://, hysteria2://, tuic://,
+//! anytls://, naive+https://, wireguard://, socks://, http(s)://
 
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use base64::Engine;
@@ -32,6 +33,8 @@ struct Url {
     user: String,
     host: String,
     port: u16,
+    /// Порты как в ссылке, если их несколько ("443,20000-30000")
+    ports: String,
     query: HashMap<String, String>,
     fragment: String,
 }
@@ -51,6 +54,10 @@ fn parse_url(rest: &str) -> Option<Url> {
         None => (String::new(), rest),
     };
     let (host, port) = parse_hostport(hostport)?;
+    let ports = match hostport.rsplit_once(':') {
+        Some((_, p)) if p.contains([',', '-']) && !hostport.ends_with(']') => p.trim_end_matches('/').to_string(),
+        _ => String::new(),
+    };
     let mut query = HashMap::new();
     for kv in query_s.split('&') {
         if kv.is_empty() {
@@ -59,7 +66,7 @@ fn parse_url(rest: &str) -> Option<Url> {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
         query.insert(k.to_string(), pct(v));
     }
-    Some(Url { user, host, port, query, fragment })
+    Some(Url { user, host, port, ports, query, fragment })
 }
 
 fn parse_hostport(s: &str) -> Option<(String, u16)> {
@@ -81,17 +88,41 @@ fn fmt_host(h: &str) -> String {
     }
 }
 
+/// Названия транспорта из разных клиентов → принятые в приложении.
+pub fn normalize_network(n: &str) -> String {
+    match n.trim().to_ascii_lowercase().as_str() {
+        "" | "raw" | "tcp" => "tcp",
+        "websocket" | "ws" => "ws",
+        "splithttp" | "xhttp" => "xhttp",
+        "gun" | "grpc" => "grpc",
+        "http-upgrade" | "httpupgrade" => "httpupgrade",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
+fn flag(q: &HashMap<String, String>, keys: &[&str]) -> bool {
+    keys.iter().any(|k| matches!(q.get(*k).map(|s| s.as_str()), Some("1") | Some("true")))
+}
+
 fn apply_stream_query(p: &mut Profile, q: &HashMap<String, String>) {
     let g = |k: &str| q.get(k).cloned().unwrap_or_default();
-    p.network = q.get("type").cloned().unwrap_or_else(|| "tcp".into());
-    if p.network == "splithttp" {
-        p.network = "xhttp".into();
-    }
+    p.network = normalize_network(q.get("type").map(|s| s.as_str()).unwrap_or("tcp"));
     p.header_type = if p.network == "grpc" || p.network == "xhttp" { g("mode") } else { g("headerType") };
     // для gRPC адрес :authority передаётся параметром `authority` (v2rayN/Xray), в старых ссылках — `host`
     p.host = if p.network == "grpc" { q.get("authority").filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| g("host")) } else { g("host") };
     p.path = if p.network == "grpc" { g("serviceName") } else { g("path") };
-    p.security = q.get("security").cloned().unwrap_or_else(|| "none".into());
+    p.security = match q.get("security").map(|s| s.as_str()) {
+        None | Some("") => "none".into(),
+        Some("xtls") => "tls".into(),
+        Some(s) => s.to_string(),
+    };
+    // ранние данные WebSocket: параметр ed → в путь, как принято в Xray
+    if matches!(p.network.as_str(), "ws" | "httpupgrade") && !p.path.contains("ed=") {
+        if let Some(ed) = q.get("ed").filter(|v| v.parse::<u32>().map(|n| n > 0).unwrap_or(false)) {
+            p.path = format!("{}{}ed={ed}", p.path, if p.path.contains('?') { '&' } else { '?' });
+        }
+    }
     p.sni = q.get("sni").or_else(|| q.get("peer")).cloned().unwrap_or_default();
     p.alpn = g("alpn");
     p.fingerprint = g("fp");
@@ -144,6 +175,39 @@ fn stream_query(p: &Profile) -> Vec<(String, String)> {
 
 fn join_query(v: &[(String, String)]) -> String {
     v.iter().map(|(k, val)| format!("{}={}", k, enc(val))).collect::<Vec<_>>().join("&")
+}
+
+/// Плагин Shadowsocks (SIP003) → транспорт профиля. false — плагин не поддерживается.
+/// `plugin` — строка вида "v2ray-plugin;mode=websocket;tls;host=a.com;path=/ws;mux=0".
+pub fn apply_ss_plugin(p: &mut Profile, plugin: &str) -> bool {
+    let mut parts = plugin.split(';');
+    let name = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+    let mut opts: HashMap<String, String> = HashMap::new();
+    for kv in parts {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, "true"));
+        opts.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+    }
+    let o = |k: &str| opts.get(k).cloned().unwrap_or_default();
+    match name.as_str() {
+        "" | "none" => true,
+        "v2ray-plugin" | "xray-plugin" => {
+            let mode = o("mode");
+            // мультиплексирование плагина (включено по умолчанию) не поддерживается
+            let mux_off = matches!(o("mux").as_str(), "0" | "false");
+            if !(mode.is_empty() || mode == "websocket") || !mux_off {
+                return false;
+            }
+            p.network = "ws".into();
+            p.host = o("host");
+            p.path = if o("path").is_empty() { "/".into() } else { o("path") };
+            if opts.contains_key("tls") && o("tls") != "false" {
+                p.security = "tls".into();
+                p.sni = o("host");
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Разбор одной ссылки.
@@ -220,7 +284,22 @@ pub fn parse_link(line: &str) -> Option<Profile> {
             p.protocol = Protocol::Shadowsocks;
             let (body, frag) = rest.split_once('#').map(|(a, b)| (a, pct(b))).unwrap_or((rest, String::new()));
             p.remarks = frag;
-            let body = body.split('?').next().unwrap_or(body).trim_end_matches('/');
+            let (body, query_s) = body.split_once('?').unwrap_or((body, ""));
+            let body = body.trim_end_matches('/');
+            let mut query = HashMap::new();
+            for kv in query_s.split('&').filter(|kv| !kv.is_empty()) {
+                let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                query.insert(k.to_string(), pct(v));
+            }
+            if query.contains_key("type") {
+                // Shadowsocks поверх транспорта Xray (ws, grpc, tls…)
+                apply_stream_query(&mut p, &query);
+            }
+            if let Some(plugin) = query.get("plugin").filter(|v| !v.is_empty()) {
+                if !apply_ss_plugin(&mut p, plugin) {
+                    return None;
+                }
+            }
             if let Some((userinfo, hostport)) = body.rsplit_once('@') {
                 let ui = pct(userinfo);
                 let decoded = if ui.contains(':') {
@@ -258,9 +337,40 @@ pub fn parse_link(line: &str) -> Option<Profile> {
             // Hysteria: pinSHA256; Xray: pcs
             p.pinned_cert_sha256 = if g("pcs").is_empty() { g("pinSHA256") } else { g("pcs") };
             p.verify_name = g("vcn");
-            p.obfs = g("obfs");
+            p.obfs = if g("obfs") == "none" { String::new() } else { g("obfs") };
             p.obfs_password = g("obfs-password");
+            p.alpn = g("alpn");
+            // port hopping: порты в адресе ("host:443,20000-30000") или параметром mport
+            p.ports = if g("mport").is_empty() { u.ports.clone() } else { g("mport") };
             p.security = "tls".into();
+            p.remarks = u.fragment;
+        }
+        "naive+https" | "naive" => {
+            let u = parse_url(rest)?;
+            let g = |k: &str| u.query.get(k).cloned().unwrap_or_default();
+            p.protocol = Protocol::Naive;
+            let (a, b) = u.user.split_once(':').unwrap_or((&u.user, ""));
+            p.username = pct(a);
+            p.id_or_password = pct(b);
+            p.address = u.host;
+            p.port = u.port;
+            p.sni = g("sni");
+            p.allow_insecure = flag(&u.query, &["insecure", "allowInsecure"]);
+            p.security = "tls".into();
+            p.remarks = u.fragment;
+        }
+        "wireguard" | "wg" => {
+            let u = parse_url(rest)?;
+            let g = |keys: &[&str]| keys.iter().find_map(|k| u.query.get(*k).filter(|v| !v.is_empty()).cloned()).unwrap_or_default();
+            p.protocol = Protocol::WireGuard;
+            p.id_or_password = pct(&u.user);
+            p.address = u.host;
+            p.port = u.port;
+            p.public_key = g(&["publickey", "publicKey", "public_key", "peer_public_key"]);
+            p.secret = g(&["presharedkey", "preSharedKey", "pre_shared_key", "psk"]);
+            p.local_address = g(&["address", "ip", "local_address"]);
+            p.reserved = g(&["reserved"]);
+            p.mtu = g(&["mtu"]).parse().unwrap_or(0);
             p.remarks = u.fragment;
         }
         "tuic" => {
@@ -275,7 +385,12 @@ pub fn parse_link(line: &str) -> Option<Profile> {
             p.port = u.port;
             p.sni = g("sni");
             p.alpn = g("alpn");
-            p.allow_insecure = matches!(g("allow_insecure").as_str(), "1" | "true") || matches!(g("insecure").as_str(), "1" | "true");
+            p.allow_insecure = flag(&u.query, &["allow_insecure", "insecure", "allowInsecure"]);
+            p.congestion = match g("congestion_control").as_str() {
+                "" | "bbr" => String::new(),
+                c => c.to_string(),
+            };
+            p.udp_relay_mode = if g("udp_relay_mode") == "quic" { "quic".into() } else { String::new() };
             p.security = "tls".into();
             p.remarks = u.fragment;
         }
@@ -287,6 +402,7 @@ pub fn parse_link(line: &str) -> Option<Profile> {
             p.address = u.host;
             p.port = u.port;
             p.sni = g("sni");
+            p.fingerprint = g("fp");
             p.allow_insecure = matches!(g("insecure").as_str(), "1" | "true") || matches!(g("allowInsecure").as_str(), "1" | "true");
             p.security = "tls".into();
             p.remarks = u.fragment;
@@ -309,7 +425,7 @@ pub fn parse_link(line: &str) -> Option<Profile> {
                 p.id_or_password = pct(b);
             }
         }
-        "socks" | "socks5" => {
+        "socks" | "socks5" | "socks5h" => {
             let u = parse_url(rest)?;
             p.protocol = Protocol::Socks;
             p.address = u.host;
@@ -331,17 +447,15 @@ pub fn parse_link(line: &str) -> Option<Profile> {
     Some(p)
 }
 
-/// Разбор текста с несколькими ссылками (или base64-подписки).
+/// Разбор текста с серверами: ссылки (в том числе base64-подписка), Clash/Mihomo YAML,
+/// конфигурации sing-box и Xray (JSON), SIP008.
 pub fn parse_many(text: &str) -> Vec<Profile> {
-    let text = text.trim();
-    let mut out: Vec<Profile> = text.lines().filter_map(parse_link).collect();
-    if out.is_empty() {
-        if let Some(dec) = b64_decode(text) {
-            let s = String::from_utf8_lossy(&dec);
-            out = s.lines().filter_map(parse_link).collect();
-        }
-    }
-    out
+    crate::formats::parse_any(text)
+}
+
+/// Только ссылки, по одной на строку.
+pub fn parse_lines(text: &str) -> Vec<Profile> {
+    text.lines().filter_map(parse_link).collect()
 }
 
 /// Генерация ссылки для обмена.
@@ -372,7 +486,12 @@ pub fn to_link(p: &Profile) -> String {
         }
         Protocol::Shadowsocks => {
             let ui = URL_SAFE_NO_PAD.encode(format!("{}:{}", p.method, p.id_or_password));
-            format!("ss://{}@{}:{}#{}", ui, host, p.port, frag)
+            let plain = matches!(p.network.as_str(), "" | "tcp") && matches!(p.security.as_str(), "" | "none") && p.header_type.is_empty();
+            if plain {
+                format!("ss://{}@{}:{}#{}", ui, host, p.port, frag)
+            } else {
+                format!("ss://{}@{}:{}?{}#{}", ui, host, p.port, join_query(&stream_query(p)), frag)
+            }
         }
         Protocol::Hysteria2 => {
             let mut q: Vec<(String, String)> = Vec::new();
@@ -389,10 +508,19 @@ pub fn to_link(p: &Profile) -> String {
                 q.push(("obfs".into(), p.obfs.clone()));
                 q.push(("obfs-password".into(), p.obfs_password.clone()));
             }
+            if !p.alpn.is_empty() {
+                q.push(("alpn".into(), p.alpn.clone()));
+            }
+            if !p.ports.is_empty() {
+                q.push(("mport".into(), p.ports.clone()));
+            }
             format!("hysteria2://{}@{}:{}/?{}#{}", enc(&p.id_or_password), host, p.port, join_query(&q), frag)
         }
         Protocol::Tuic => {
-            let mut q: Vec<(String, String)> = vec![("congestion_control".into(), "bbr".into()), ("udp_relay_mode".into(), "native".into())];
+            let mut q: Vec<(String, String)> = vec![
+                ("congestion_control".into(), if p.congestion.is_empty() { "bbr".into() } else { p.congestion.clone() }),
+                ("udp_relay_mode".into(), if p.udp_relay_mode == "quic" { "quic".into() } else { "native".into() }),
+            ];
             if !p.sni.is_empty() {
                 q.push(("sni".into(), p.sni.clone()));
             }
@@ -409,10 +537,39 @@ pub fn to_link(p: &Profile) -> String {
             if !p.sni.is_empty() {
                 q.push(("sni".into(), p.sni.clone()));
             }
+            if !p.fingerprint.is_empty() {
+                q.push(("fp".into(), p.fingerprint.clone()));
+            }
             if p.allow_insecure {
                 q.push(("insecure".into(), "1".into()));
             }
             format!("anytls://{}@{}:{}?{}#{}", enc(&p.id_or_password), host, p.port, join_query(&q), frag)
+        }
+        Protocol::Naive => {
+            let mut q: Vec<(String, String)> = Vec::new();
+            if !p.sni.is_empty() {
+                q.push(("sni".into(), p.sni.clone()));
+            }
+            if p.allow_insecure {
+                q.push(("insecure".into(), "1".into()));
+            }
+            let query = if q.is_empty() { String::new() } else { format!("?{}", join_query(&q)) };
+            format!("naive+https://{}:{}@{}:{}{}#{}", enc(&p.username), enc(&p.id_or_password), host, p.port, query, frag)
+        }
+        Protocol::WireGuard => {
+            let mut q: Vec<(String, String)> = vec![("publickey".into(), p.public_key.clone())];
+            let mut push = |k: &str, v: &str| {
+                if !v.is_empty() {
+                    q.push((k.into(), v.into()));
+                }
+            };
+            push("address", &p.local_address);
+            push("presharedkey", &p.secret);
+            push("reserved", &p.reserved);
+            if p.mtu != 0 {
+                push("mtu", &p.mtu.to_string());
+            }
+            format!("wireguard://{}@{}:{}?{}#{}", enc(&p.id_or_password), host, p.port, join_query(&q), frag)
         }
         Protocol::Http => {
             let scheme = if p.security == "tls" { "https" } else { "http" };

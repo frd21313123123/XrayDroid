@@ -6,13 +6,14 @@ license.workspace = true
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+socket2 = "0.6"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 ipstack = "1"
-shadowsocks = { version = "1.25", default-features = false, features = ["aead-cipher", "aead-cipher-2022"] }
+shadowsocks = { version = "1.25", default-features = false, features = ["aead-cipher", "aead-cipher-extra", "aead-cipher-2022", "aead-cipher-2022-extra", "stream-cipher"] }
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 aes = "0.8"
@@ -29,6 +30,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 percent-encoding = "2"
 regex = "1"
 log = "0.4"

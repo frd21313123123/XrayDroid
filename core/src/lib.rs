@@ -4,6 +4,7 @@
 pub mod common;
 pub mod config;
 pub mod engine;
+pub mod formats;
 pub mod links;
 pub mod logbuf;
 pub mod proxy;

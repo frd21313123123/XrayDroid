@@ -3,6 +3,7 @@
 pub mod anytls;
 pub mod http;
 pub mod hysteria2;
+pub mod naive;
 pub mod quic;
 pub mod shadowsocks;
 pub mod socks;
@@ -55,6 +56,8 @@ impl Outbound {
                 Protocol::Tuic => tuic::tcp(p, app, dest).await,
                 Protocol::AnyTls => anytls::tcp(p, app, dest).await,
                 Protocol::Http => http::tcp(p, app, dest).await,
+                Protocol::Naive => naive::tcp(p, app, dest).await,
+                Protocol::WireGuard => Err(io_err("WireGuard пока не поддерживается")),
             },
         }
     }
@@ -69,17 +72,26 @@ impl Outbound {
                 Protocol::Vmess => vmess::udp(p, app, dest).await,
                 Protocol::Trojan => trojan::udp(p, app, dest).await,
                 Protocol::Shadowsocks => shadowsocks::udp(p, app, dest).await,
-                Protocol::Socks => Err(io_err("UDP через SOCKS не поддерживается")),
+                Protocol::Socks => socks::udp(p, app, dest).await,
                 Protocol::Hysteria2 => hysteria2::udp(p, app, dest).await,
                 Protocol::Tuic => tuic::udp(p, app, dest).await,
-                Protocol::AnyTls => Err(io_err("UDP через AnyTLS не поддерживается")),
+                Protocol::AnyTls => anytls::udp(p, app, dest).await,
                 Protocol::Http => Err(io_err("UDP через HTTP-прокси невозможен")),
+                Protocol::Naive => Err(io_err("UDP через NaiveProxy невозможен")),
+                Protocol::WireGuard => Err(io_err("WireGuard пока не поддерживается")),
             },
         }
     }
 }
 
 pub const UDP_IDLE: Duration = Duration::from_secs(60);
+
+/// Закрыть кэшированные сессии всех протоколов (смена сети, остановка).
+pub fn reset_sessions() {
+    anytls::reset();
+    hysteria2::reset();
+    tuic::reset();
+}
 
 async fn udp_direct(mut app: BoxStream, dest: &Address) -> io::Result<()> {
     let target = dest.resolve().await?;

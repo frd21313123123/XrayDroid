@@ -1,12 +1,17 @@
 //! Транспорты поверх HTTP/2: gRPC (gun / multi) и XHTTP (stream-one, stream-up, packet-up),
 //! а также HTTP-маскировка для TCP.
 
+use std::collections::HashMap;
 use std::future::poll_fn;
 use std::io;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
 use h2::client::SendRequest;
 use h2::SendStream;
+use parking_lot::Mutex;
 use rand::Rng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -15,7 +20,7 @@ use crate::config::Profile;
 
 const UA: &str = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
 
-fn h2err(e: h2::Error) -> io::Error {
+pub(crate) fn h2err(e: h2::Error) -> io::Error {
     io_err(format!("HTTP/2: {e}"))
 }
 
@@ -37,24 +42,176 @@ fn scheme(p: &Profile) -> &'static str {
     }
 }
 
-async fn connect(stream: BoxStream) -> io::Result<SendRequest<Bytes>> {
+// ───────────────────────── Пул соединений ─────────────────────────
+
+/// Больше потоков на одно TCP-соединение — сильнее взаимная блокировка при потерях.
+const MAX_TUNNELS_PER_CONN: usize = 24;
+/// Серверы и CDN закрывают соединение после N запросов (nginx — 1000): уходим раньше.
+const MAX_REQUESTS_PER_CONN: usize = 600;
+const PING_EVERY: Duration = Duration::from_secs(20);
+const PING_TIMEOUT: Duration = Duration::from_secs(10);
+/// Сколько проверок подряд соединение может простоять без потоков
+const IDLE_TICKS: u32 = 4;
+
+struct Pooled {
+    send: SendRequest<Bytes>,
+    closed: Arc<AtomicBool>,
+    tunnels: Arc<AtomicUsize>,
+    requests: Arc<AtomicUsize>,
+}
+
+/// Удерживает место в соединении, пока жив туннель.
+pub struct TunnelGuard {
+    tunnels: Arc<AtomicUsize>,
+    requests: Arc<AtomicUsize>,
+}
+
+impl TunnelGuard {
+    /// Учесть ещё один запрос в этом соединении; false — пора переходить на другое.
+    pub fn count_request(&self) -> bool {
+        self.requests.fetch_add(1, Ordering::Relaxed) + 1 < MAX_REQUESTS_PER_CONN
+    }
+}
+
+impl Drop for TunnelGuard {
+    fn drop(&mut self) {
+        self.tunnels.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+type Pool = HashMap<String, Vec<Arc<Pooled>>>;
+
+fn pool() -> &'static Mutex<Pool> {
+    static P: OnceLock<Mutex<Pool>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+fn dial_locks() -> &'static Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    static L: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// Закрыть все соединения пула (смена сети, остановка).
+pub fn reset_pool() {
+    for (_, list) in pool().lock().drain() {
+        for c in list {
+            c.closed.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn pool_key(p: &Profile) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        crate::transport::network(p),
+        p.address,
+        p.port,
+        p.security,
+        p.sni,
+        p.host,
+        p.alpn,
+        p.fingerprint,
+        p.public_key,
+        p.short_id,
+        p.allow_insecure,
+        p.pinned_cert_sha256
+    )
+}
+
+fn take_pooled(key: &str) -> Option<(SendRequest<Bytes>, TunnelGuard)> {
+    let mut pool = pool().lock();
+    let list = pool.get_mut(key)?;
+    list.retain(|c| !c.closed.load(Ordering::Relaxed));
+    let c = list
+        .iter()
+        .filter(|c| c.requests.load(Ordering::Relaxed) < MAX_REQUESTS_PER_CONN && c.tunnels.load(Ordering::Relaxed) < MAX_TUNNELS_PER_CONN)
+        .min_by_key(|c| c.tunnels.load(Ordering::Relaxed))?;
+    c.tunnels.fetch_add(1, Ordering::Relaxed);
+    c.requests.fetch_add(1, Ordering::Relaxed);
+    Some((c.send.clone(), TunnelGuard { tunnels: c.tunnels.clone(), requests: c.requests.clone() }))
+}
+
+/// Соединение HTTP/2 для нового потока: живое из пула или новое.
+pub async fn acquire<F, Fut>(key: String, dial: F) -> io::Result<(SendRequest<Bytes>, TunnelGuard)>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = io::Result<BoxStream>>,
+{
+    if let Some((send, guard)) = take_pooled(&key) {
+        match send.ready().await {
+            Ok(s) => return Ok((s, guard)),
+            Err(e) => log::debug!("h2: соединение из пула не годится ({e}), открываю новое"),
+        }
+    }
+    // одновременно стартовавшие потоки ждут одно рукопожатие, а не делают каждый своё
+    let lock = dial_locks().lock().entry(key.clone()).or_default().clone();
+    let _dialing = lock.lock().await;
+    if let Some((send, guard)) = take_pooled(&key) {
+        if let Ok(s) = send.ready().await {
+            return Ok((s, guard));
+        }
+    }
+    let stream = dial().await?;
+    log::debug!("h2: новое соединение ({})", key.split('|').take(3).collect::<Vec<_>>().join(" "));
     let (send, conn) = h2::client::Builder::new()
         .initial_window_size(4 << 20)
-        .initial_connection_window_size(8 << 20)
+        .initial_connection_window_size(16 << 20)
         .max_frame_size(1 << 16)
         .handshake::<_, Bytes>(stream)
         .await
         .map_err(h2err)?;
+    let closed = Arc::new(AtomicBool::new(false));
+    let tunnels = Arc::new(AtomicUsize::new(1));
+    let mut conn = conn;
+    let mut pinger = conn.ping_pong();
+    let (closed2, tunnels2) = (closed.clone(), tunnels.clone());
     tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            log::debug!("h2 соединение закрыто: {e}");
+        let keepalive = async {
+            let mut idle = 0u32;
+            loop {
+                tokio::time::sleep(PING_EVERY).await;
+                if closed2.load(Ordering::Relaxed) {
+                    return "закрыто";
+                }
+                if tunnels2.load(Ordering::Relaxed) == 0 {
+                    idle += 1;
+                    if idle >= IDLE_TICKS {
+                        return "простой";
+                    }
+                } else {
+                    idle = 0;
+                }
+                if let Some(pp) = pinger.as_mut() {
+                    match tokio::time::timeout(PING_TIMEOUT, pp.ping(h2::Ping::opaque())).await {
+                        Ok(Ok(_)) => {}
+                        _ => return "сервер не отвечает на PING",
+                    }
+                }
+            }
+        };
+        tokio::select! {
+            r = &mut conn => {
+                if let Err(e) = r {
+                    log::debug!("h2 соединение закрыто: {e}");
+                }
+            }
+            why = keepalive => log::debug!("h2 соединение закрыто: {why}"),
         }
+        closed2.store(true, Ordering::Relaxed);
     });
-    send.ready().await.map_err(h2err)
+    let send = send.ready().await.map_err(h2err)?;
+    let requests = Arc::new(AtomicUsize::new(1));
+    let entry = Arc::new(Pooled { send: send.clone(), closed, tunnels: tunnels.clone(), requests: requests.clone() });
+    pool().lock().entry(key).or_default().push(entry);
+    Ok((send, TunnelGuard { tunnels, requests }))
+}
+
+async fn acquire_for(p: &Profile) -> io::Result<(SendRequest<Bytes>, TunnelGuard)> {
+    acquire(pool_key(p), || crate::transport::dial_secured(p)).await
 }
 
 /// Отправка с учётом управления потоком HTTP/2.
-async fn send_all(tx: &mut SendStream<Bytes>, mut data: Bytes) -> io::Result<()> {
+pub(crate) async fn send_all(tx: &mut SendStream<Bytes>, mut data: Bytes) -> io::Result<()> {
     while !data.is_empty() {
         tx.reserve_capacity(data.len());
         let cap = match poll_fn(|cx| tx.poll_capacity(cx)).await {
@@ -75,8 +232,12 @@ fn request(method: &str, uri: &str) -> http::request::Builder {
 }
 
 /// Чтение тела ответа и передача (с преобразованием) в канал.
-async fn pump_response<F>(resp: h2::client::ResponseFuture, mut out: tokio::io::WriteHalf<tokio::io::DuplexStream>, mut f: F)
-where
+async fn pump_response<F>(
+    resp: h2::client::ResponseFuture,
+    mut out: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    mut f: F,
+    _guard: TunnelGuard,
+) where
     F: FnMut(&[u8], &mut Vec<u8>),
 {
     let r: io::Result<()> = async {
@@ -99,7 +260,7 @@ where
     }
     .await;
     if let Err(e) = r {
-        log::debug!("{e}");
+        log::warn!("HTTP/2: {e}");
     }
     let _ = out.shutdown().await;
 }
@@ -236,8 +397,8 @@ impl GrpcDecoder {
     }
 }
 
-pub async fn grpc(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
-    let mut send = connect(stream).await?;
+pub async fn grpc(p: &Profile) -> io::Result<BoxStream> {
+    let (mut send, guard) = acquire_for(p).await?;
     let multi = p.header_type == "multi";
     let uri = format!("{}://{}{}", scheme(p), authority(p), grpc_path(&p.path, multi));
     let req = request("POST", &uri)
@@ -250,7 +411,7 @@ pub async fn grpc(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
     let (br, bw) = tokio::io::split(b);
     tokio::spawn(pump_request(br, tx, grpc_encode));
     let mut dec = GrpcDecoder::default();
-    tokio::spawn(pump_response(resp, bw, move |chunk, out| dec.feed(chunk, out)));
+    tokio::spawn(pump_response(resp, bw, move |chunk, out| dec.feed(chunk, out), guard));
     Ok(Box::new(a))
 }
 
@@ -285,8 +446,8 @@ pub fn xhttp_mode(p: &Profile) -> &'static str {
     }
 }
 
-pub async fn xhttp(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
-    let send = connect(stream).await?;
+pub async fn xhttp(p: &Profile) -> io::Result<BoxStream> {
+    let (send, guard) = acquire_for(p).await?;
     let base = format!("{}://{}{}", scheme(p), authority(p), xhttp_base_path(&p.path));
     let mode = xhttp_mode(p);
     let (a, b) = tokio::io::duplex(256 * 1024);
@@ -304,7 +465,7 @@ pub async fn xhttp(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
         let mut s = send.clone();
         let (resp, tx) = s.send_request(stream_req("POST", &base, true)?, false).map_err(h2err)?;
         tokio::spawn(pump_request(br, tx, Bytes::copy_from_slice));
-        tokio::spawn(pump_response(resp, bw, |c, out| out.extend_from_slice(c)));
+        tokio::spawn(pump_response(resp, bw, |c, out| out.extend_from_slice(c), guard));
         return Ok(Box::new(a));
     }
 
@@ -314,7 +475,7 @@ pub async fn xhttp(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
     let mut s = send.clone();
     let (resp, mut down_tx) = s.send_request(stream_req("GET", &url, false)?, true).map_err(h2err)?;
     let _ = &mut down_tx;
-    tokio::spawn(pump_response(resp, bw, |c, out| out.extend_from_slice(c)));
+    tokio::spawn(pump_response(resp, bw, |c, out| out.extend_from_slice(c), guard));
 
     if mode == "stream-up" {
         let mut s = send.clone();
@@ -328,8 +489,12 @@ pub async fn xhttp(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
     }
 
     // packet-up: каждый кусок — отдельный POST /path/session/seq
+    let profile = p.clone();
     tokio::spawn(async move {
         let mut br = br;
+        let mut send = send;
+        let mut up_guard: Option<TunnelGuard> = None;
+        let mut fresh = true;
         let mut seq: u64 = 0;
         let mut buf = vec![0u8; 1_000_000];
         let mut last = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -358,9 +523,24 @@ pub async fn xhttp(stream: BoxStream, p: &Profile) -> io::Result<BoxStream> {
                 Ok(r) => r,
                 Err(_) => break,
             };
-            let mut s = match send.clone().ready().await {
+            // соединение могло закрыться или исчерпать лимит запросов — берём другое из пула
+            let usable = fresh || up_guard.as_ref().map(|g| g.count_request()).unwrap_or(true);
+            fresh = false;
+            let ready = if usable { send.clone().ready().await.map_err(|_| ()) } else { Err(()) };
+            let mut s = match ready {
                 Ok(s) => s,
-                Err(_) => break,
+                Err(()) => match acquire_for(&profile).await {
+                    Ok((s, g)) => {
+                        send = s.clone();
+                        up_guard = Some(g);
+                        fresh = true;
+                        s
+                    }
+                    Err(e) => {
+                        log::warn!("XHTTP: {e}");
+                        break;
+                    }
+                },
             };
             let (resp, mut tx) = match s.send_request(req, false) {
                 Ok(x) => x,

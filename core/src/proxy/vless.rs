@@ -157,18 +157,17 @@ async fn vision_conn(p: &Profile, enc: &Option<super::vless_enc::EncConfig>) -> 
     if net != "tcp" {
         return Err(io_err("flow xtls-rprx-vision работает только с транспортом TCP (или с VLESS Encryption)"));
     }
-    let tcp = transport::connect_tcp(&transport::server_addr(p)).await?;
-    tcp.set_nodelay(true).ok();
+    let tcp = transport::dialer::connect_for_tls(&transport::server_addr(p)).await?;
     let fut = async {
         match p.security.as_str() {
-            "reality" => reality::connect(tcp, &transport::reality_config(p)?).await,
+            "reality" => reality::connect_stream(tcp, &transport::reality_config(p)?).await,
             "tls" => {
                 let sni = transport::sni_for(p);
                 let alpn: Vec<String> =
                     p.alpn.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                 let alpn = if alpn.is_empty() { vec!["h2".into(), "http/1.1".into()] } else { alpn };
                 let policy = transport::certs::CertPolicy::of(p);
-                tls13::handshake(Box::new(tcp), &sni, &alpn, tls13::Mode::Verify(&policy)).await
+                tls13::handshake(tcp, &sni, &alpn, tls13::Mode::Verify(&policy)).await
             }
             _ => Err(io_err("flow xtls-rprx-vision требует TLS, REALITY или VLESS Encryption")),
         }

@@ -57,6 +57,8 @@ async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
         alpn: vec!["h3".into()],
         cert: crate::transport::certs::CertPolicy::of(p),
         salamander: if p.obfs == "salamander" { Some(p.obfs_password.as_bytes().to_vec()) } else { None },
+        hop_ports: quic::parse_ports(&p.ports),
+        congestion: p.congestion.clone(),
     };
     let (endpoint, conn) = quic::connect(&opts).await?;
 
@@ -139,8 +141,25 @@ async fn get_client(p: &Profile) -> io::Result<Arc<Client>> {
     Ok(client)
 }
 
-pub async fn tcp(p: &Profile, app: BoxStream, dest: &Address) -> io::Result<()> {
-    let c = get_client(p).await?;
+pub fn reset() {
+    if let Ok(mut m) = clients().try_lock() {
+        for (_, c) in m.drain() {
+            c.conn.close(0u32.into(), b"");
+        }
+    }
+}
+
+/// Убрать клиента из кэша: соединение не отвечает (например, сменилась сеть).
+async fn discard(p: &Profile, c: &Arc<Client>) {
+    c.conn.close(0u32.into(), b"");
+    let key = crate::links::to_link(p);
+    let mut map = clients().lock().await;
+    if map.get(&key).map(|x| Arc::ptr_eq(x, c)).unwrap_or(false) {
+        map.remove(&key);
+    }
+}
+
+async fn open_tcp(c: &Client, dest: &Address) -> io::Result<(quinn::SendStream, quinn::RecvStream)> {
     let (mut send, mut recv) = c.conn.open_bi().await.map_err(|e| io_err(format!("Hysteria2: {e}")))?;
     let addr = addr_string(dest);
     let pad = padding(64, 512);
@@ -153,15 +172,34 @@ pub async fn tcp(p: &Profile, app: BoxStream, dest: &Address) -> io::Result<()> 
     send.write_all(&req).await.map_err(|e| io_err(e.to_string()))?;
     let status = recv.read_u8().await?;
     let ml = read_varint(&mut recv).await? as usize;
-    let mut msg = vec![0u8; ml];
+    let mut msg = vec![0u8; ml.min(4096)];
     AsyncReadExt::read_exact(&mut recv, &mut msg).await?;
     let pl = read_varint(&mut recv).await? as usize;
-    let mut pd = vec![0u8; pl];
+    let mut pd = vec![0u8; pl.min(4096)];
     AsyncReadExt::read_exact(&mut recv, &mut pd).await?;
     if status != 0 {
-        return Err(io_err(format!("Hysteria2: сервер отказал: {}", String::from_utf8_lossy(&msg))));
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            format!("Hysteria2: сервер отказал: {}", String::from_utf8_lossy(&msg)),
+        ));
     }
-    crate::common::relay(app, tokio::io::join(recv, send)).await
+    Ok((send, recv))
+}
+
+pub async fn tcp(p: &Profile, app: BoxStream, dest: &Address) -> io::Result<()> {
+    let mut last = io_err("Hysteria2: нет соединения");
+    // запрос не дошёл или сервер молчит — соединение мертво: пробуем ещё раз на новом
+    for _ in 0..2 {
+        let c = get_client(p).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(8), open_tcp(&c, dest)).await {
+            Ok(Ok((send, recv))) => return crate::common::relay(app, tokio::io::join(recv, send)).await,
+            Ok(Err(e)) if e.kind() == io::ErrorKind::ConnectionRefused => return Err(e),
+            Ok(Err(e)) => last = e,
+            Err(_) => last = io_err("Hysteria2: сервер не отвечает"),
+        }
+        discard(p, &c).await;
+    }
+    Err(last)
 }
 
 pub async fn udp(p: &Profile, mut app: BoxStream, dest: &Address) -> io::Result<()> {

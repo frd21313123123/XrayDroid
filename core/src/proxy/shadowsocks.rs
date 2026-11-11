@@ -34,14 +34,24 @@ async fn server_config(p: &Profile) -> io::Result<ServerConfig> {
         .map_err(|e| io_err(format!("Shadowsocks: {e}")))
 }
 
+/// Shadowsocks идёт поверх любого транспорта профиля (TCP, WebSocket, gRPC, TLS…) — как в Xray
+/// и как `v2ray-plugin` в режиме websocket.
 pub async fn tcp(p: &Profile, app: BoxStream, dest: &Address) -> io::Result<()> {
     let cfg = server_config(p).await?;
-    let tcp = transport::connect_tcp(&transport::server_addr(p)).await?;
-    let s = ProxyClientStream::from_stream(context(), tcp, &cfg, ss_addr(dest));
+    let base = transport::dial(p).await?;
+    let s = ProxyClientStream::from_stream(context(), base, &cfg, ss_addr(dest));
     crate::common::relay(app, s).await
 }
 
+/// Транспорт профиля — не «чистый» TCP: UDP-пакеты напрямую на порт сервера не дойдут.
+fn plain(p: &Profile) -> bool {
+    transport::network(p) == "tcp" && p.header_type.is_empty() && matches!(p.security.as_str(), "" | "none")
+}
+
 pub async fn udp(p: &Profile, mut app: BoxStream, dest: &Address) -> io::Result<()> {
+    if !plain(p) {
+        return Err(io_err("Shadowsocks: UDP работает только без дополнительного транспорта"));
+    }
     let cfg = server_config(p).await?;
     let sock = ProxySocket::connect(context(), &cfg).await.map_err(|e| io_err(format!("Shadowsocks UDP: {e}")))?;
     let target = ss_addr(dest);

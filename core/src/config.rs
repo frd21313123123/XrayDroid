@@ -17,6 +17,10 @@ pub enum Protocol {
     #[serde(rename = "anytls")]
     AnyTls,
     Http,
+    /// NaiveProxy: HTTP/2 CONNECT с паддингом
+    Naive,
+    #[serde(rename = "wireguard")]
+    WireGuard,
 }
 
 impl Protocol {
@@ -31,9 +35,11 @@ impl Protocol {
             Protocol::Tuic => "TUIC",
             Protocol::AnyTls => "AnyTLS",
             Protocol::Http => "HTTP",
+            Protocol::Naive => "Naive",
+            Protocol::WireGuard => "WireGuard",
         }
     }
-    pub fn all() -> [Protocol; 9] {
+    pub fn all() -> [Protocol; 11] {
         [
             Protocol::Vless,
             Protocol::Vmess,
@@ -44,11 +50,17 @@ impl Protocol {
             Protocol::Tuic,
             Protocol::AnyTls,
             Protocol::Http,
+            Protocol::Naive,
+            Protocol::WireGuard,
         ]
     }
     /// Протоколы с выбором транспорта (ws, grpc, xhttp…)
     pub fn has_transport(&self) -> bool {
         matches!(self, Protocol::Vless | Protocol::Vmess | Protocol::Trojan)
+    }
+    /// Протоколы, у которых слой безопасности — всегда TLS
+    pub fn always_tls(&self) -> bool {
+        matches!(self, Protocol::Hysteria2 | Protocol::Tuic | Protocol::AnyTls | Protocol::Naive)
     }
 }
 
@@ -93,8 +105,20 @@ pub struct Profile {
     /// Обфускация (Hysteria2: salamander)
     pub obfs: String,
     pub obfs_password: String,
-    /// Второй секрет (TUIC: пароль)
+    /// Второй секрет (TUIC: пароль, WireGuard: pre-shared key)
     pub secret: String,
+    /// Порты для port hopping (Hysteria2): "20000-30000,443"
+    pub ports: String,
+    /// TUIC: способ передачи UDP — native | quic
+    pub udp_relay_mode: String,
+    /// Управление перегрузкой QUIC: bbr | cubic | new_reno
+    pub congestion: String,
+    /// WireGuard: адреса интерфейса, "10.0.0.2/32, fd00::2/128"
+    pub local_address: String,
+    /// WireGuard: reserved — три байта, "1,2,3" или base64 (Cloudflare WARP)
+    pub reserved: String,
+    /// WireGuard: MTU туннеля (0 — 1280)
+    pub mtu: u16,
     /// Результат теста задержки, мс: 0 — не тестировался, -1 — ошибка
     pub delay_ms: i64,
 }
@@ -116,10 +140,16 @@ impl Profile {
         if self.protocol.has_transport() {
             s.push_str(&format!(" · {}", net));
         }
+        if !self.protocol.has_transport() && self.protocol != Protocol::Vless && !matches!(net, "tcp" | "raw") {
+            s.push_str(&format!(" · {}", net));
+        }
         if self.protocol == Protocol::Hysteria2 && self.obfs == "salamander" {
             s.push_str(" · salamander");
         }
-        if !self.security.is_empty() && self.security != "none" {
+        if self.protocol == Protocol::Hysteria2 && !self.ports.is_empty() {
+            s.push_str(" · hop");
+        }
+        if !self.security.is_empty() && self.security != "none" && !self.protocol.always_tls() {
             s.push_str(&format!(" · {}", self.security));
         }
         if self.protocol == Protocol::Vless && self.method.starts_with("mlkem") {
@@ -296,6 +326,12 @@ pub struct Settings {
     pub allow_insecure_default: bool,
     /// Обновлять подписки раз в сутки
     pub sub_auto_update: bool,
+    /// Фрагментация TLS ClientHello (обход DPI по SNI)
+    pub fragment: bool,
+    /// Длина фрагмента, байт: "100-200"
+    pub fragment_length: String,
+    /// Пауза между фрагментами, мс: "10-20"
+    pub fragment_interval: String,
 }
 
 impl Default for Settings {
@@ -315,6 +351,9 @@ impl Default for Settings {
             sub_user_agent: "v2rayNG/1.10.0".into(),
             allow_insecure_default: false,
             sub_auto_update: true,
+            fragment: false,
+            fragment_length: "100-200".into(),
+            fragment_interval: "10-20".into(),
         }
     }
 }

@@ -98,6 +98,7 @@ pub fn shared_runtime() -> &'static tokio::runtime::Runtime {
 /// Запуск ядра. `tun_fd` — дескриптор от VpnService (None — только SOCKS-вход).
 pub fn start(cfg: &AppConfig, geo_dir: &Path, tun_fd: Option<i32>) -> io::Result<()> {
     stop();
+    crate::transport::dialer::apply_settings(&cfg.settings);
     let profile = cfg.selected_profile().cloned().ok_or_else(|| io_err("не выбран сервер"))?;
     let router = Router::new(&cfg.routing, geo_dir);
     let stats = Arc::new(Stats::default());
@@ -142,8 +143,16 @@ pub fn start(cfg: &AppConfig, geo_dir: &Path, tun_fd: Option<i32>) -> io::Result
 pub fn stop() {
     if let Some(r) = RUNNING.lock().take() {
         r.rt.shutdown_timeout(Duration::from_millis(500));
+        reset_connections();
         log::info!("Остановлено");
     }
+}
+
+/// Сбросить кэши соединений и DNS: после смены сети старые соединения мертвы.
+pub fn reset_connections() {
+    crate::transport::http2::reset_pool();
+    crate::transport::dialer::flush_dns();
+    crate::proxy::reset_sessions();
 }
 
 pub fn is_running() -> bool {

@@ -2,6 +2,7 @@
 //!   itest socks <link> <port>    — SOCKS5-вход через сервер из ссылки
 //!   itest udp <link> <host:port> — отправить UDP-пакет и дождаться ответа
 //!   itest delay <link> <url>     — тест задержки
+//!   itest parse <файл>           — разобрать подписку/конфигурацию и показать серверы
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use xd_core::common::Address;
@@ -17,11 +18,23 @@ fn main() {
         println!("servers={} title={:?} info={:?}", r.profiles.len(), r.title, r.info);
         return;
     }
+    if a[1] == "parse" {
+        let text = std::fs::read_to_string(&a[2]).unwrap();
+        for p in xd_core::links::parse_many(&text) {
+            println!("{} | {} | {}:{}", p.display_name(), p.summary(), p.address, p.port);
+        }
+        return;
+    }
     let p = xd_core::links::parse_link(&a[2]).expect("bad link");
+    // XD_FRAGMENT=1 — фрагментация TLS ClientHello
+    let mut settings = xd_core::config::Settings::default();
+    settings.fragment = std::env::var("XD_FRAGMENT").is_ok();
+    xd_core::transport::dialer::apply_settings(&settings);
     match a[1].as_str() {
         "socks" => {
             let mut cfg = xd_core::AppConfig::default();
             xd_core::route::presets::apply_preset(&mut cfg.routing, "global");
+            cfg.settings = settings;
             cfg.settings.socks_port = a[3].parse().unwrap();
             cfg.selected = p.id.clone();
             cfg.profiles.push(p);

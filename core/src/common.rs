@@ -140,20 +140,9 @@ impl Address {
         Ok(Address { host, port })
     }
 
-    /// Разрешение адреса в SocketAddr (системный резолвер).
+    /// Разрешение адреса в SocketAddr (системный резолвер, с кэшем).
     pub async fn resolve(&self) -> io::Result<SocketAddr> {
-        match &self.host {
-            Host::Ip(ip) => Ok(SocketAddr::new(*ip, self.port)),
-            Host::Domain(d) => {
-                let mut it = tokio::net::lookup_host((d.as_str(), self.port)).await?;
-                let all: Vec<SocketAddr> = it.by_ref().collect();
-                all.iter()
-                    .find(|a| a.is_ipv4())
-                    .or_else(|| all.first())
-                    .copied()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("cannot resolve {d}")))
-            }
-        }
+        crate::transport::dialer::resolve(self).await
     }
 }
 

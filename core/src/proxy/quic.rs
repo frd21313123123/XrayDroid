@@ -22,7 +22,33 @@ pub struct QuicOpts {
     pub cert: crate::transport::certs::CertPolicy,
     /// Пароль Salamander (Hysteria2 obfs)
     pub salamander: Option<Vec<u8>>,
+    /// Порты для port hopping (пусто — один порт сервера)
+    pub hop_ports: Vec<u16>,
+    /// bbr | cubic | new_reno
+    pub congestion: String,
 }
+
+/// "443,20000-30000" → список портов.
+pub fn parse_ports(spec: &str) -> Vec<u16> {
+    let mut out = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (a, b) = part.split_once('-').unwrap_or((part, part));
+        if let (Ok(a), Ok(b)) = (a.trim().parse::<u16>(), b.trim().parse::<u16>()) {
+            let (a, b) = if a <= b { (a, b) } else { (b, a) };
+            out.extend((a..=b).filter(|p| *p != 0));
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Как часто меняется порт (как hopInterval в Hysteria по умолчанию).
+const HOP_INTERVAL: Duration = Duration::from_secs(30);
 
 fn tls_config(alpn: &[String], policy: &crate::transport::certs::CertPolicy) -> io::Result<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -36,11 +62,26 @@ fn tls_config(alpn: &[String], policy: &crate::transport::certs::CertPolicy) -> 
 }
 
 pub async fn connect(o: &QuicOpts) -> io::Result<(quinn::Endpoint, quinn::Connection)> {
-    let target = o.server.resolve().await?;
+    let mut target = o.server.resolve().await?;
+    if let Some(first) = o.hop_ports.first() {
+        if !o.hop_ports.contains(&target.port()) {
+            target.set_port(*first);
+        }
+    }
     let bind: SocketAddr = if target.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
     let std_sock = std::net::UdpSocket::bind(bind)?;
     let runtime: Arc<dyn quinn::Runtime> = Arc::new(quinn::TokioRuntime);
     let sock = runtime.wrap_udp_socket(std_sock)?;
+    let sock: Arc<dyn AsyncUdpSocket> = if o.hop_ports.len() > 1 {
+        Arc::new(HopSocket {
+            inner: sock,
+            canonical: target,
+            ports: o.hop_ports.clone(),
+            state: parking_lot::Mutex::new((target.port(), std::time::Instant::now() + HOP_INTERVAL)),
+        })
+    } else {
+        sock
+    };
     let sock: Arc<dyn AsyncUdpSocket> = match &o.salamander {
         Some(key) => Arc::new(Salamander { inner: sock, key: key.clone() }),
         None => sock,
@@ -53,7 +94,11 @@ pub async fn connect(o: &QuicOpts) -> io::Result<(quinn::Endpoint, quinn::Connec
     let mut t = quinn::TransportConfig::default();
     t.max_idle_timeout(Some(Duration::from_secs(30).try_into().unwrap()));
     t.keep_alive_interval(Some(Duration::from_secs(10)));
-    t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+    match o.congestion.trim().to_ascii_lowercase().as_str() {
+        "cubic" => t.congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
+        "new_reno" | "newreno" | "reno" => t.congestion_controller_factory(Arc::new(quinn::congestion::NewRenoConfig::default())),
+        _ => t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())),
+    };
     t.stream_receive_window((8u32 << 20).into());
     t.receive_window((32u32 << 20).into());
     t.send_window(32 << 20);
@@ -75,6 +120,82 @@ pub async fn connect(o: &QuicOpts) -> io::Result<(quinn::Endpoint, quinn::Connec
         .map_err(|_| io_err("таймаут QUIC-рукопожатия"))?
         .map_err(|e| io_err(format!("QUIC: {e}")))?;
     Ok((endpoint, conn))
+}
+
+// ───────────────────────── Port hopping ─────────────────────────
+
+/// Отправляет пакеты на периодически меняющийся порт сервера. Для QUIC адрес сервера
+/// остаётся прежним: во входящих пакетах порт подменяется обратно.
+struct HopSocket {
+    inner: Arc<dyn AsyncUdpSocket>,
+    canonical: SocketAddr,
+    ports: Vec<u16>,
+    /// (текущий порт, когда менять)
+    state: parking_lot::Mutex<(u16, std::time::Instant)>,
+}
+
+impl fmt::Debug for HopSocket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("HopSocket")
+    }
+}
+
+impl HopSocket {
+    fn port(&self) -> u16 {
+        let mut st = self.state.lock();
+        let now = std::time::Instant::now();
+        if now >= st.1 {
+            use rand::Rng;
+            st.0 = self.ports[rand::thread_rng().gen_range(0..self.ports.len())];
+            st.1 = now + HOP_INTERVAL;
+            log::debug!("port hopping: {}:{}", self.canonical.ip(), st.0);
+        }
+        st.0
+    }
+}
+
+impl AsyncUdpSocket for HopSocket {
+    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
+        self.inner.clone().create_io_poller()
+    }
+
+    fn try_send(&self, t: &Transmit) -> io::Result<()> {
+        self.inner.try_send(&Transmit {
+            destination: SocketAddr::new(self.canonical.ip(), self.port()),
+            ecn: t.ecn,
+            contents: t.contents,
+            segment_size: t.segment_size,
+            src_ip: t.src_ip,
+        })
+    }
+
+    fn poll_recv(&self, cx: &mut Context, bufs: &mut [IoSliceMut<'_>], meta: &mut [RecvMeta]) -> Poll<io::Result<usize>> {
+        let r = self.inner.poll_recv(cx, bufs, meta);
+        if let Poll::Ready(Ok(n)) = &r {
+            for m in meta.iter_mut().take(*n) {
+                if m.addr.ip() == self.canonical.ip() {
+                    m.addr = self.canonical;
+                }
+            }
+        }
+        r
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    fn max_transmit_segments(&self) -> usize {
+        self.inner.max_transmit_segments()
+    }
+
+    fn max_receive_segments(&self) -> usize {
+        self.inner.max_receive_segments()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.inner.may_fragment()
+    }
 }
 
 // ───────────────────────── Salamander ─────────────────────────
@@ -210,6 +331,13 @@ pub async fn read_varint<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ports() {
+        assert_eq!(super::parse_ports("443, 1000-1002,1001"), vec![443, 1000, 1001, 1002]);
+        assert_eq!(super::parse_ports("5-3"), vec![3, 4, 5]);
+        assert!(super::parse_ports("x").is_empty());
+    }
+
     #[test]
     fn varint() {
         for v in [0u64, 63, 64, 16383, 16384, 1 << 29, 1 << 40] {

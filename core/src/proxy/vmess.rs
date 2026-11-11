@@ -120,7 +120,13 @@ fn seal_header(cmd_key: &[u8; 16], header: &[u8]) -> Vec<u8> {
 enum BodyAead {
     Aes(Box<Aes128Gcm>),
     Chacha(Box<ChaCha20Poly1305>),
+    /// security = none: чанки с маскированной длиной, без шифрования и паддинга
+    Plain,
 }
+
+const SEC_AES: u8 = 3;
+const SEC_CHACHA: u8 = 4;
+const SEC_NONE: u8 = 5;
 
 struct Shake(sha3::Shake128Reader);
 
@@ -146,7 +152,9 @@ struct Chunker {
 
 impl Chunker {
     fn new(security: u8, key: &[u8; 16], iv: &[u8; 16]) -> Self {
-        let aead = if security == 4 {
+        let aead = if security == SEC_NONE {
+            BodyAead::Plain
+        } else if security == SEC_CHACHA {
             let a = Md5::digest(key);
             let b = Md5::digest(a);
             let mut k = [0u8; 32];
@@ -168,6 +176,12 @@ impl Chunker {
     }
 
     fn seal(&mut self, data: &[u8], out: &mut Vec<u8>) {
+        if let BodyAead::Plain = self.aead {
+            let mask = self.shake.next();
+            out.extend_from_slice(&((data.len() as u16) ^ mask).to_be_bytes());
+            out.extend_from_slice(data);
+            return;
+        }
         let pad = (self.shake.next() % 64) as usize;
         let mask = self.shake.next();
         let size = (data.len() + 16 + pad) as u16;
@@ -178,6 +192,7 @@ impl Chunker {
         let tag = match &self.aead {
             BodyAead::Aes(c) => c.encrypt_in_place_detached(n, &[], &mut buf),
             BodyAead::Chacha(c) => c.encrypt_in_place_detached(n, &[], &mut buf),
+            BodyAead::Plain => unreachable!(),
         }
         .unwrap();
         out.extend_from_slice(&buf);
@@ -189,6 +204,20 @@ impl Chunker {
 
     /// None — конец потока (пустой чанк).
     async fn open<R: AsyncRead + Unpin>(&mut self, r: &mut R) -> io::Result<Option<Vec<u8>>> {
+        if let BodyAead::Plain = self.aead {
+            let mask = self.shake.next();
+            let size = match r.read_u16().await {
+                Ok(s) => (s ^ mask) as usize,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            if size == 0 {
+                return Ok(None);
+            }
+            let mut buf = vec![0u8; size];
+            r.read_exact(&mut buf).await?;
+            return Ok(Some(buf));
+        }
         let pad = (self.shake.next() % 64) as usize;
         let mask = self.shake.next();
         let size = match r.read_u16().await {
@@ -210,6 +239,7 @@ impl Chunker {
         match &self.aead {
             BodyAead::Aes(c) => c.decrypt_in_place_detached(n, &[], &mut buf, &tag),
             BodyAead::Chacha(c) => c.decrypt_in_place_detached(n, &[], &mut buf, &tag),
+            BodyAead::Plain => unreachable!(),
         }
         .map_err(|_| io_err("VMess: ошибка расшифровки чанка"))?;
         if buf.is_empty() {
@@ -235,10 +265,12 @@ fn build_request(p: &Profile, cmd: u8, dest: &Address) -> io::Result<(Vec<u8>, S
     md5::Digest::update(&mut h, b"c48619fe-8f02-49e0-b9e9-edf763e17e21");
     let cmd_key: [u8; 16] = h.finalize().into();
 
+    // none и zero — без шифрования тела (его защищает TLS); zero в Xray ещё и без чанков,
+    // но чанки нужны для UDP и корректного завершения потока, поэтому zero идёт как none
     let security = match p.method.to_lowercase().as_str() {
-        "chacha20-poly1305" | "chacha20-ietf-poly1305" => 4u8,
-        "none" | "zero" => return Err(io_err("VMess: security none/zero не поддерживается, используйте auto")),
-        _ => 3u8, // auto / aes-128-gcm
+        "chacha20-poly1305" | "chacha20-ietf-poly1305" => SEC_CHACHA,
+        "none" | "zero" => SEC_NONE,
+        _ => SEC_AES, // auto / aes-128-gcm
     };
     let mut req_key = [0u8; 16];
     let mut req_iv = [0u8; 16];
@@ -254,7 +286,8 @@ fn build_request(p: &Profile, cmd: u8, dest: &Address) -> io::Result<(Vec<u8>, S
     hdr.extend_from_slice(&req_iv);
     hdr.extend_from_slice(&req_key);
     hdr.push(resp_v);
-    hdr.push(0x01 | 0x04 | 0x08); // ChunkStream | ChunkMasking | GlobalPadding
+    // ChunkStream | ChunkMasking (| GlobalPadding — только с шифрованием, как в Xray)
+    hdr.push(if security == SEC_NONE { 0x01 | 0x04 } else { 0x01 | 0x04 | 0x08 });
     hdr.push((pad_len << 4) | security);
     hdr.push(0);
     hdr.push(cmd);
