@@ -49,6 +49,8 @@ rustls-webpki = { version = "0.103", default-features = false, features = ["ring
 libc = "0.2"
 parking_lot = "0.12"
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+smoltcp = { version = "0.12", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-tcp-cubic", "socket-udp"] }
+boringtun = { version = "0.7", default-features = false }
 
 [dev-dependencies]
 rcgen = "0.13"

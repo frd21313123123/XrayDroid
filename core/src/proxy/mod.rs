@@ -13,6 +13,7 @@ pub mod vision;
 pub mod vless;
 pub mod vless_enc;
 pub mod vmess;
+pub mod wireguard;
 
 use std::io;
 use std::sync::Arc;
@@ -57,7 +58,7 @@ impl Outbound {
                 Protocol::AnyTls => anytls::tcp(p, app, dest).await,
                 Protocol::Http => http::tcp(p, app, dest).await,
                 Protocol::Naive => naive::tcp(p, app, dest).await,
-                Protocol::WireGuard => Err(io_err("WireGuard пока не поддерживается")),
+                Protocol::WireGuard => wireguard::tcp(p, app, dest).await,
             },
         }
     }
@@ -78,7 +79,7 @@ impl Outbound {
                 Protocol::AnyTls => anytls::udp(p, app, dest).await,
                 Protocol::Http => Err(io_err("UDP через HTTP-прокси невозможен")),
                 Protocol::Naive => Err(io_err("UDP через NaiveProxy невозможен")),
-                Protocol::WireGuard => Err(io_err("WireGuard пока не поддерживается")),
+                Protocol::WireGuard => wireguard::udp(p, app, dest).await,
             },
         }
     }
@@ -91,6 +92,7 @@ pub fn reset_sessions() {
     anytls::reset();
     hysteria2::reset();
     tuic::reset();
+    wireguard::reset();
 }
 
 async fn udp_direct(mut app: BoxStream, dest: &Address) -> io::Result<()> {
